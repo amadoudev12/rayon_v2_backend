@@ -3,8 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { containsText } from "@/lib/search";
 import { requireAuthContext, requirePermission, resolveActiveStoreId } from "@/lib/auth/session";
 import { getActiveStoreId } from "@/lib/auth/store";
-import { categorySchema, productSchema, stockAdjustmentSchema } from "@/lib/validations/product";
-import { createProduct, deleteProduct, updateProduct } from "@/lib/services/product";
+import { categorySchema, productImportSchema, productSchema, stockAdjustmentSchema } from "@/lib/validations/product";
+import { createProduct, deleteProduct, importProducts, updateProduct } from "@/lib/services/product";
 import { adjustStock } from "@/lib/services/stock";
 import { SaleStatus } from "@/generated/prisma/enums";
 import { apiRoute, jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
@@ -161,6 +161,29 @@ catalogRouter.post(
     const product = await createProduct(context, storeId, parsed);
 
     return jsonData(res, product, { status: 201 });
+  }),
+);
+
+// Import d'une liste de produits lue dans un fichier Excel : le site lit le
+// fichier et envoie ses lignes ; le stock initial suit la même règle de
+// boutique que la création d'un produit.
+catalogRouter.post(
+  "/products/import",
+  apiRoute(async (req, res) => {
+    const context = await requireAuthContext();
+    requirePermission(context, "product:manage");
+
+    const parsed = productImportSchema.parse(req.body);
+    // Les catégories absentes du catalogue sont créées par l'import.
+    if (parsed.lignes.some((row) => row.categorie)) requirePermission(context, "category:manage");
+
+    const requestedStoreId = Number(searchParams(req).get("storeId")) || undefined;
+    const storeId = requestedStoreId
+      ? await resolveActiveStoreId(context, requestedStoreId)
+      : await getActiveStoreId(context);
+    const result = await importProducts(context, storeId, parsed.lignes);
+
+    return jsonData(res, result, { status: 201 });
   }),
 );
 

@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { createPurchase } from "@/lib/services/purchase";
 import { adjustStock } from "@/lib/services/stock";
-import { createProduct, updateProduct } from "@/lib/services/product";
+import { createProduct, importProducts, updateProduct } from "@/lib/services/product";
+import type { ProductImportRow } from "@/lib/validations/product";
 import { StockMovementType } from "@/generated/prisma/enums";
 import { createProduit, createShop, resetDatabase, stockOf } from "./helpers/factories";
 
@@ -169,5 +170,87 @@ describe("createProduct / updateProduct — catalogue", () => {
 
     const unchanged = await prisma.produit.findUniqueOrThrow({ where: { id: produitAutre.id } });
     expect(unchanged.nom).toBe("Original");
+  });
+});
+
+describe("importProducts — import d'une liste de produits", () => {
+  const ligne = (nom: string, extra: Partial<ProductImportRow> = {}): ProductImportRow => ({
+    nom,
+    unite: "pièce",
+    prixAchat: 100,
+    prixVente: 150,
+    seuilAlerte: 5,
+    ...extra,
+  });
+
+  it("crée les produits, leurs catégories, le stock de chaque boutique et les mouvements initiaux", async () => {
+    const shop = await createShop();
+    const annexe = await prisma.boutique.create({ data: { organisationId: shop.organisation.id, nom: "Annexe" } });
+    await prisma.categorie.create({ data: { organisationId: shop.organisation.id, nom: "Boissons" } });
+
+    const result = await importProducts(shop.context, shop.boutique.id, [
+      ligne("Jus de bissap", { categorie: "boissons", quantiteInitiale: 24 }),
+      ligne("Savon", { categorie: "Hygiène", quantiteInitiale: 0 }),
+      ligne("Dentifrice", { categorie: "hygiène", reference: "DEN-01", quantiteInitiale: 7 }),
+    ]);
+
+    expect(result).toEqual({ crees: 3, categoriesCreees: 1, ignores: [] });
+    // « boissons » réutilise la catégorie existante, « Hygiène » n'est créée qu'une fois.
+    expect(await prisma.categorie.count()).toBe(2);
+
+    const jus = await prisma.produit.findFirstOrThrow({ where: { nom: "Jus de bissap" }, include: { categorie: true } });
+    const dentifrice = await prisma.produit.findFirstOrThrow({ where: { reference: "DEN-01" }, include: { categorie: true } });
+    expect(jus.categorie?.nom).toBe("Boissons");
+    expect(dentifrice.categorie?.nom).toBe("Hygiène");
+    expect(await stockOf(shop.boutique.id, jus.id)).toBe(24);
+    expect(await stockOf(annexe.id, jus.id)).toBe(0);
+    expect(await stockOf(shop.boutique.id, dentifrice.id)).toBe(7);
+    expect(await prisma.stock.count()).toBe(6);
+
+    const mouvements = await prisma.mouvementStock.findMany({ orderBy: { variationQuantite: "asc" } });
+    expect(mouvements.map((m) => [m.produitId, m.variationQuantite, m.type])).toEqual([
+      [dentifrice.id, 7, StockMovementType.INITIAL],
+      [jus.id, 24, StockMovementType.INITIAL],
+    ]);
+  });
+
+  it("ignore les produits déjà au catalogue et les doublons du fichier, sans rien dupliquer", async () => {
+    const shop = await createShop();
+    await createProduit(shop.organisation.id, shop.boutique.id, { nom: "Riz parfumé" });
+    await prisma.produit.create({
+      data: { organisationId: shop.organisation.id, nom: "Huile", reference: "HUI-1", prixAchat: 1, prixVente: 2 },
+    });
+
+    const result = await importProducts(shop.context, shop.boutique.id, [
+      ligne("riz  PARFUMÉ", { ligne: 2 }),
+      ligne("Huile 5L", { ligne: 3, reference: "hui-1" }),
+      ligne("Sucre", { ligne: 4 }),
+      ligne("Sucre", { ligne: 5 }),
+      // Même nom mais références distinctes : deux produits différents.
+      ligne("Lait", { ligne: 6, reference: "LAIT-1L" }),
+      ligne("Lait", { ligne: 7, reference: "LAIT-2L" }),
+    ]);
+
+    expect(result.crees).toBe(3);
+    expect(result.ignores.map((ignore) => ignore.ligne)).toEqual([2, 3, 5]);
+    expect(await prisma.produit.count()).toBe(5);
+
+    // Réimporter le même fichier ne crée plus rien.
+    const second = await importProducts(shop.context, shop.boutique.id, [ligne("Sucre"), ligne("Lait", { reference: "LAIT-1L" })]);
+    expect(second.crees).toBe(0);
+    expect(await prisma.produit.count()).toBe(5);
+  });
+
+  it("refuse la boutique d'une autre organisation et ne voit pas son catalogue", async () => {
+    const shop = await createShop("A");
+    const other = await createShop("B");
+    await createProduit(other.organisation.id, other.boutique.id, { nom: "Savon" });
+
+    await expect(importProducts(shop.context, other.boutique.id, [ligne("Savon")])).rejects.toMatchObject({ status: 403 });
+
+    // Le « Savon » de l'autre organisation n'empêche pas d'en créer un ici.
+    const result = await importProducts(shop.context, shop.boutique.id, [ligne("Savon")]);
+    expect(result.crees).toBe(1);
+    expect(await prisma.produit.count({ where: { organisationId: other.organisation.id } })).toBe(1);
   });
 });

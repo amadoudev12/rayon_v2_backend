@@ -32,3 +32,25 @@ export const stockAdjustmentSchema = z.object({
 
 export type StockAdjustmentFormData = z.infer<typeof stockAdjustmentSchema>;
 export type StockAdjustmentFormInput = z.input<typeof stockAdjustmentSchema>;
+
+/** Nombre maximal de lignes acceptées par un import de fichier. */
+export const PRODUCT_IMPORT_MAX_ROWS = 1000;
+
+/**
+ * Une ligne d'un fichier importé : un produit dont la catégorie est donnée par
+ * son nom (créée si elle n'existe pas) et non par son identifiant.
+ */
+export const productImportRowSchema = productSchema.omit({ categorieId: true, actif: true }).extend({
+  categorie: z.string().trim().optional().or(z.literal("")),
+  /** Numéro de la ligne dans le fichier, pour désigner les lignes ignorées. */
+  ligne: z.coerce.number().int().positive().optional(),
+});
+
+export type ProductImportRow = z.infer<typeof productImportRowSchema>;
+
+export const productImportSchema = z.object({
+  lignes: z
+    .array(productImportRowSchema)
+    .min(1, "Le fichier ne contient aucun produit.")
+    .max(PRODUCT_IMPORT_MAX_ROWS, `Un import est limité à ${PRODUCT_IMPORT_MAX_ROWS} produits.`),
+});
