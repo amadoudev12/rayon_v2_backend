@@ -6,7 +6,6 @@
  * la base de données.
  *
  * Utilisation :
- *   SUPER_ADMIN_EMAIL="moi@exemple.com" SUPER_ADMIN_PASSWORD="MotDePasse123" npm run admin:create
  *
  * Variables optionnelles : SUPER_ADMIN_PRENOM, SUPER_ADMIN_NOM.
  * - Email inconnu : le compte est créé (mot de passe obligatoire).
@@ -36,7 +35,6 @@ async function main() {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   try {
     const existing = await prisma.utilisateur.findUnique({ where: { email }, select: { id: true, membre: true } });
-
     if (existing?.membre) {
       fail(`${email} est membre d'une boutique. Utilisez une adresse dédiée à l'administration de la plateforme.`);
     }

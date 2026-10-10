@@ -1,57 +1,32 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express from "express";
 import { allowedOrigins } from "@/env";
-import { errorHandler } from "@/lib/api/response";
-import { SESSION_COOKIE } from "@/lib/auth/token";
 import { requestContext } from "@/lib/http/context";
-import { adminRouter } from "@/routes/admin";
-import { authRouter } from "@/routes/auth";
-import { catalogRouter } from "@/routes/catalog";
-import { commerceRouter } from "@/routes/commerce";
-import { organizationRouter } from "@/routes/organization";
-import { pagesRouter } from "@/routes/pages";
-
-/** En-têtes de sécurité d'une API qui ne renvoie que du JSON. */
-const SECURITY_HEADERS = {
-  "X-Frame-Options": "DENY",
-  "X-Content-Type-Options": "nosniff",
-  "Referrer-Policy": "strict-origin-when-cross-origin",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
-};
-
-function securityHeaders(_req: Request, res: Response, next: NextFunction) {
-  res.set(SECURITY_HEADERS);
-  // Les réponses dépendent du compte connecté : jamais mises en cache.
-  res.set("Cache-Control", "no-store");
-  next();
-}
-
-const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-
-/**
- * Protection CSRF du cookie de session : une requête d'écriture qui porte le
- * cookie doit venir du site lui-même (en-tête `Origin` autorisé). Un autre
- * site ne peut donc pas faire agir le navigateur d'un utilisateur connecté.
- * L'application mobile (jeton Bearer, pas de cookie) n'est pas concernée.
- */
-function verifyOrigin(req: Request, res: Response, next: NextFunction) {
-  if (SAFE_METHODS.has(req.method)) return next();
-  const cookies = req.cookies as Record<string, string> | undefined;
-  if (!cookies?.[SESSION_COOKIE]) return next();
-
-  const origin = req.get("origin");
-  if (origin && allowedOrigins().includes(origin)) return next();
-
-  res.status(403).json({ message: "Origine de la requête non autorisée." });
-}
+import { errorHandler } from "@/middleware/errorHandler";
+import { securityHeaders, verifyOrigin } from "@/middleware/security";
+import adminRoutes from "@/routes/admin.routes";
+import authRoutes from "@/routes/auth.routes";
+import categoryRoutes from "@/routes/category.routes";
+import customerRoutes from "@/routes/customer.routes";
+import dashboardRoutes from "@/routes/dashboard.routes";
+import expenseRoutes from "@/routes/expense.routes";
+import memberRoutes from "@/routes/member.routes";
+import organizationRoutes from "@/routes/organization.routes";
+import pageRoutes from "@/routes/page.routes";
+import productRoutes from "@/routes/product.routes";
+import purchaseRoutes from "@/routes/purchase.routes";
+import saleRoutes from "@/routes/sale.routes";
+import stockRoutes from "@/routes/stock.routes";
+import storeRoutes from "@/routes/store.routes";
+import supplierRoutes from "@/routes/supplier.routes";
 
 export function createApp() {
   const app = express();
   app.disable("x-powered-by");
   app.set("etag", false);
 
+  // Middlewares appliqués à toutes les requêtes
   app.use(securityHeaders);
   app.use(cors({ origin: allowedOrigins(), credentials: true }));
   app.use(cookieParser());
@@ -63,13 +38,28 @@ export function createApp() {
     res.json({ status: "ok" });
   });
 
-  app.use("/api/admin", adminRouter);
-  app.use("/api/pages", pagesRouter);
-  app.use("/api", authRouter, organizationRouter, catalogRouter, commerceRouter);
+  // Routes
+  app.use("/api/admin", adminRoutes);
+  app.use("/api/pages", pageRoutes);
+  // Connexion, session, inscription, profil, onboarding
+  app.use("/api", authRoutes);
+  app.use("/api/organization", organizationRoutes);
+  app.use("/api/stores", storeRoutes);
+  app.use("/api/members", memberRoutes);
+  app.use("/api/categories", categoryRoutes);
+  app.use("/api/products", productRoutes);
+  app.use("/api/stock", stockRoutes);
+  app.use("/api/dashboard", dashboardRoutes);
+  app.use("/api/sales", saleRoutes);
+  app.use("/api/purchases", purchaseRoutes);
+  app.use("/api/customers", customerRoutes);
+  app.use("/api/suppliers", supplierRoutes);
+  app.use("/api/expenses", expenseRoutes);
 
   app.use((_req, res) => {
     res.status(404).json({ message: "Ressource introuvable" });
   });
+  // Middleware d'erreur : doit être en dernier
   app.use(errorHandler);
 
   return app;

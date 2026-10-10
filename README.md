@@ -43,8 +43,30 @@ $env:SUPER_ADMIN_EMAIL = "moi@exemple.com"; $env:SUPER_ADMIN_PASSWORD = "MotDePa
 | `npm run db:migrate` | Applique les migrations Prisma |
 | `npm run db:seed` | Crée les données de démonstration (ne fait rien si elles existent) |
 | `npm run admin:create` | Crée ou promeut un super administrateur |
-| `npm test` | Tests d'intégration (62 tests) |
+| `npm test` | Tests d'intégration (65 tests) |
 | `npm run typecheck` / `npm run lint` | Contrôle de types / ESLint |
+
+### Organisation du code
+
+```
+src/
+  server.ts        démarrage du serveur
+  app.ts           middlewares globaux et montage des routes (/api/products, /api/sales…)
+  routes/          une ressource par fichier : adresse -> middlewares -> contrôleur
+  controllers/     une fonction (req, res) par route : lit la requête, répond en JSON
+  middleware/      verifyToken, requirePermission, requireSuperAdmin, errorHandler, security
+  services/        règles métier en transaction (vente, achat, stock, import de produits…)
+  lib/             prisma, auth (session, jeton, permissions), validations zod, réponses et erreurs
+```
+
+Pour suivre une requête, par exemple `POST /api/products` :
+
+1. `app.ts` envoie `/api/products` vers `routes/product.routes.ts` ;
+2. la route enchaîne `verifyToken` (remplit `req.user`), `requirePermission("product:manage")`, puis le contrôleur `createProduct` ;
+3. `controllers/product.controller.ts` valide `req.body` avec zod, appelle `productService.createProduct(...)` et renvoie `{ data }` ;
+4. une erreur levée en route (`throw Errors.notFound(...)`, validation refusée) est transformée en réponse par `middleware/errorHandler.ts` : il n'y a donc pas de `try/catch` dans les contrôleurs.
+
+Les lectures de page du site (`/api/pages/**`) suivent le même schéma avec `routes/page.routes.ts`, `controllers/page.controller.ts` et `controllers/adminPage.controller.ts`.
 
 ### Tests
 

@@ -9,6 +9,10 @@ const TOP_PRODUCTS_SIZE = 5;
 
 export type DashboardStats = Awaited<ReturnType<typeof getDashboardStats>>;
 
+function monthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
 /**
  * Agrège les chiffres dont un commerçant a réellement besoin, limités à son
  * organisation (et éventuellement à une seule boutique). Chaque lecture passe
@@ -181,7 +185,16 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
     .slice(0, 8);
 
   return {
-    period: { start: startOfMonth, previousStart: startOfPreviousMonth, previousEnd: endOfPreviousPeriod },
+    period: {
+      start: startOfMonth,
+      previousStart: startOfPreviousMonth,
+      previousEnd: endOfPreviousPeriod,
+      // Mois au format « AAAA-MM », dans le fuseau du serveur : c'est lui que les
+      // clients affichent. Relire `start` dans le fuseau de l'appareil peut
+      // basculer sur le mois voisin (minuit à Paris = la veille au soir en UTC).
+      month: monthKey(startOfMonth),
+      previousMonth: monthKey(startOfPreviousMonth),
+    },
     revenue,
     previousRevenue,
     /** Variation en % par rapport à la même période du mois précédent ; null si rien à comparer. */

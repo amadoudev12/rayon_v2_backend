@@ -19,7 +19,7 @@ import {
   SESSION_EXPIRED_PATH,
 } from "@/lib/auth/session";
 import { createApp } from "@/app";
-import { createSale } from "@/lib/services/sale";
+import { createSale } from "@/services/sale";
 import { contextFor, createMember, createProduit, createShop, resetDatabase } from "./helpers/factories";
 
 beforeEach(async () => {

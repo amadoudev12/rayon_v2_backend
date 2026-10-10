@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { createSale, cancelSale } from "@/lib/services/sale";
+import { createSale, cancelSale } from "@/services/sale";
 import { SaleStatus, StockMovementType } from "@/generated/prisma/enums";
 import { createProduit, createShop, resetDatabase, stockOf } from "./helpers/factories";
 

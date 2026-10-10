@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { createPurchase } from "@/lib/services/purchase";
-import { adjustStock } from "@/lib/services/stock";
-import { createProduct, importProducts, updateProduct } from "@/lib/services/product";
+import { createPurchase } from "@/services/purchase";
+import { adjustStock } from "@/services/stock";
+import { createProduct, importProducts, updateProduct } from "@/services/product";
 import type { ProductImportRow } from "@/lib/validations/product";
 import { StockMovementType } from "@/generated/prisma/enums";
 import { createProduit, createShop, resetDatabase, stockOf } from "./helpers/factories";

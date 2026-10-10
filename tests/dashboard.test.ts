@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { createSale, cancelSale } from "@/lib/services/sale";
-import { getDashboardStats } from "@/lib/services/dashboard";
+import { createSale, cancelSale } from "@/services/sale";
+import { getDashboardStats } from "@/services/dashboard";
 import { createProduit, createShop, resetDatabase } from "./helpers/factories";
 
 beforeEach(resetDatabase);

@@ -18,8 +18,8 @@ import {
   requireUserId,
   SESSION_EXPIRED_PATH,
 } from "@/lib/auth/session";
-import { createSale, cancelSale } from "@/lib/services/sale";
-import { getPlatformActivity, getPlatformAlerts, getPlatformAnalytics, getPlatformOverview } from "@/lib/services/platform";
+import { createSale, cancelSale } from "@/services/sale";
+import { getPlatformActivity, getPlatformAlerts, getPlatformAnalytics, getPlatformOverview } from "@/services/platform";
 import {
   createOrganizationWithOwner,
   getOrganizationDetails,
@@ -27,7 +27,7 @@ import {
   listUsers,
   setOrganizationActive,
   setUserActive,
-} from "@/lib/services/platform-admin";
+} from "@/services/platform-admin";
 import { createApp } from "@/app";
 import { createMember, createProduit, createShop, resetDatabase } from "./helpers/factories";
 
