@@ -18,4 +18,5 @@ const app = createApp();
 
 app.listen(port(), () => {
   console.log("Démarrage du serveur...");
+  console.log("Serveur démarré");
 });
