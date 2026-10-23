@@ -165,6 +165,7 @@ async function main() {
           montantPaye: sousTotal,
           creeLe,
           lignes: { create: lines },
+          paiements: { create: { montant: sousTotal, date: creeLe, utilisateurId: seller.id } },
         },
       });
 
@@ -195,6 +196,7 @@ async function main() {
         boutiqueId: store.id,
         creeParId: owner.id,
         total: new Prisma.Decimal(bissap.prixAchat).times(30),
+        montantPaye: new Prisma.Decimal(bissap.prixAchat).times(30),
         note: "Réapprovisionnement (démo)",
         lignes: {
           create: [

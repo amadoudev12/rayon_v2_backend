@@ -13,6 +13,8 @@ import {
   getStockMovementsPage,
   getSalesPage,
   getNewSalePage,
+  getCreditsPage,
+  getQuotesPage,
   getPurchasesPage,
   getCustomersPage,
   getSuppliersPage,
@@ -58,6 +60,10 @@ router.get("/stock", verifyPageToken, getStockPage);
 router.get("/stock/mouvements", verifyPageToken, getStockMovementsPage);
 router.get("/ventes", verifyPageToken, getSalesPage);
 router.get("/ventes/nouvelle", verifyPageToken, getNewSalePage);
+router.get("/creances", verifyPageToken, getCreditsPage);
+router.get("/devis", verifyPageToken, getQuotesPage);
+// Un devis se compose avec le même catalogue et les mêmes clients qu'une vente.
+router.get("/devis/nouveau", verifyPageToken, getNewSalePage);
 router.get("/achats", verifyPageToken, requirePermission("purchase:manage"), getPurchasesPage);
 router.get("/clients", verifyPageToken, getCustomersPage);
 router.get("/fournisseurs", verifyPageToken, requirePermission("supplier:manage"), getSuppliersPage);

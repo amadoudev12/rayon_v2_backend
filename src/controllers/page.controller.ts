@@ -1,6 +1,10 @@
 import type { Request, Response } from "express";
 import * as dashboardService from "@/services/dashboard";
+import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
+import { remainingOf } from "@/services/sale";
+import { PaymentMethod, SaleStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import { parsePeriod } from "@/lib/period";
 import { containsText } from "@/lib/search";
 import { getOnboardingRedirect, getSession, getSuspendedRedirect } from "@/lib/auth/session";
 import { getActiveStoreId } from "@/lib/auth/store";
@@ -212,13 +216,17 @@ export async function getSalesPage(req: Request, res: Response) {
   const context = req.user;
   const storeId = await getActiveStoreId(context);
   const canCancel = can(context.role, "sale:cancel");
+  const canViewFinance = can(context.role, "report:view");
 
   const search = params.get("search")?.trim() ?? "";
   const pagination = getPagination(params, 10);
+  // La liste et les statistiques portent sur la même période (aujourd'hui par défaut).
+  const period = parsePeriod(params);
 
   const where = {
     organisationId: context.organizationId,
     boutiqueId: storeId,
+    creeLe: { gte: period.start, lt: period.end },
     ...(search
       ? {
           OR: [
@@ -229,7 +237,7 @@ export async function getSalesPage(req: Request, res: Response) {
       : {}),
   };
 
-  const [sales, total, organization] = await Promise.all([
+  const [sales, total, organization, stats] = await Promise.all([
     prisma.vente.findMany({
       where,
       orderBy: { creeLe: "desc" },
@@ -243,13 +251,16 @@ export async function getSalesPage(req: Request, res: Response) {
     }),
     prisma.vente.count({ where }),
     prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
+    getSalesStats(context, storeId, period),
   ]);
 
   // On ne garde que les champs utilisés par le tableau des ventes.
   const salesForClient = sales.map((sale) => ({
     id: sale.id,
     statut: sale.statut,
+    modePaiement: sale.modePaiement,
     total: Number(sale.total),
+    resteAPayer: Number(remainingOf(sale)),
     creeLe: sale.creeLe,
     lignes: sale.lignes,
     client: sale.client,
@@ -258,7 +269,10 @@ export async function getSalesPage(req: Request, res: Response) {
 
   return jsonData(res, {
     sales: salesForClient,
+    period,
+    stats: visibleSalesStats(stats, canViewFinance),
     canCancel,
+    canCollect: can(context.role, "sale:create"),
     currency: organization.devise,
     page: pagination.page,
     totalPages: paginationMeta(pagination, total).totalPages,
@@ -299,6 +313,121 @@ export async function getNewSalePage(req: Request, res: Response) {
   return jsonData(res, { products: catalog, customers, currency: organization.devise });
 }
 
+/**
+ * Créances de la boutique : ventes à crédit (et toute vente non soldée),
+ * filtrées par statut — `en_cours` (défaut), `reglee` ou `toutes` — et par
+ * nom de client. Les ventes annulées n'en font jamais partie.
+ */
+export async function getCreditsPage(req: Request, res: Response) {
+  const params = searchParams(req);
+  const context = req.user;
+  const storeId = await getActiveStoreId(context);
+
+  const search = params.get("search")?.trim() ?? "";
+  const status = params.get("statut") ?? "en_cours";
+  const pagination = getPagination(params, 10);
+  const unpaid = { montantPaye: { lt: prisma.vente.fields.total } };
+
+  const credits = {
+    organisationId: context.organizationId,
+    boutiqueId: storeId,
+    statut: SaleStatus.COMPLETED,
+    OR: [{ modePaiement: PaymentMethod.CREDIT }, unpaid],
+  };
+  const where = {
+    ...credits,
+    AND: [
+      status === "reglee" ? { montantPaye: { gte: prisma.vente.fields.total } } : status === "toutes" ? {} : unpaid,
+      search ? { client: { nom: containsText(search) } } : {},
+    ],
+  };
+
+  const [sales, total, outstanding, organization] = await Promise.all([
+    prisma.vente.findMany({
+      where,
+      orderBy: { creeLe: "desc" },
+      skip: (pagination.page - 1) * pagination.limit,
+      take: pagination.limit,
+      select: {
+        id: true,
+        total: true,
+        montantPaye: true,
+        creeLe: true,
+        client: { select: { id: true, nom: true, telephone: true } },
+        paiements: { orderBy: { date: "desc" }, take: 1, select: { date: true } },
+      },
+    }),
+    prisma.vente.count({ where }),
+    prisma.vente.aggregate({ where: { ...credits, ...unpaid }, _sum: { total: true, montantPaye: true }, _count: true }),
+    prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
+  ]);
+
+  return jsonData(res, {
+    credits: sales.map(({ paiements, ...sale }) => ({
+      ...sale,
+      total: Number(sale.total),
+      montantPaye: Number(sale.montantPaye),
+      resteAPayer: Number(remainingOf(sale)),
+      dernierPaiement: paiements[0]?.date ?? null,
+    })),
+    summary: {
+      outstanding: Number(outstanding._sum.total ?? 0) - Number(outstanding._sum.montantPaye ?? 0),
+      count: outstanding._count,
+    },
+    canCollect: can(context.role, "sale:create"),
+    currency: organization.devise,
+    page: pagination.page,
+    totalPages: paginationMeta(pagination, total).totalPages,
+    total,
+  });
+}
+
+export async function getQuotesPage(req: Request, res: Response) {
+  const params = searchParams(req);
+  const context = req.user;
+  const storeId = await getActiveStoreId(context);
+
+  const search = params.get("search")?.trim() ?? "";
+  const pagination = getPagination(params, 10);
+
+  const where = {
+    organisationId: context.organizationId,
+    boutiqueId: storeId,
+    ...(search ? { OR: [{ client: { nom: containsText(search) } }, { nomClient: containsText(search) }] } : {}),
+  };
+
+  const [quotes, total, organization] = await Promise.all([
+    prisma.devis.findMany({
+      where,
+      orderBy: { creeLe: "desc" },
+      skip: (pagination.page - 1) * pagination.limit,
+      take: pagination.limit,
+      select: {
+        id: true,
+        total: true,
+        nomClient: true,
+        valableJusquAu: true,
+        creeLe: true,
+        client: { select: { id: true, nom: true } },
+        creePar: { select: { prenom: true, nom: true } },
+        _count: { select: { lignes: true } },
+      },
+    }),
+    prisma.devis.count({ where }),
+    prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
+  ]);
+
+  return jsonData(res, {
+    quotes: quotes.map((quote) => ({ ...quote, total: Number(quote.total) })),
+    canCreate: can(context.role, "sale:create"),
+    canDelete: can(context.role, "sale:cancel"),
+    currency: organization.devise,
+    page: pagination.page,
+    totalPages: paginationMeta(pagination, total).totalPages,
+    total,
+  });
+}
+
 export async function getPurchasesPage(req: Request, res: Response) {
   const context = req.user;
   const storeId = await getActiveStoreId(context);
@@ -332,7 +461,11 @@ export async function getPurchasesPage(req: Request, res: Response) {
   ]);
 
   return jsonData(res, {
-    purchases: purchases.map((purchase) => ({ ...purchase, total: Number(purchase.total) })),
+    purchases: purchases.map((purchase) => ({
+      ...purchase,
+      total: Number(purchase.total),
+      montantPaye: Number(purchase.montantPaye),
+    })),
     products: products.map((p) => ({ ...p, prixAchat: Number(p.prixAchat) })),
     suppliers,
     currency: organization.devise,

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { Errors } from "@/lib/api/errors";
-import { SaleStatus, StockMovementType } from "@/generated/prisma/enums";
+import { PaymentMethod, SaleStatus, StockMovementType } from "@/generated/prisma/enums";
 import { Prisma } from "@/generated/prisma/client";
 import { sumDecimals } from "@/lib/money";
 import type { AuthContext } from "@/lib/auth/session";
@@ -10,9 +10,36 @@ const saleInclude = {
   lignes: { include: { produit: { select: { id: true, nom: true, unite: true } } } },
   client: { select: { id: true, nom: true } },
   vendeur: { select: { id: true, prenom: true, nom: true } },
+  paiements: { orderBy: { date: "asc" } },
 } satisfies Prisma.VenteInclude;
 
 export type SaleWithDetails = Prisma.VenteGetPayload<{ include: typeof saleInclude }>;
+
+/** Reste à payer d'une vente : total − somme des paiements (jamais négatif). */
+export function remainingOf(sale: { total: Prisma.Decimal; montantPaye: Prisma.Decimal }): Prisma.Decimal {
+  const remaining = sale.total.minus(sale.montantPaye);
+  return remaining.isNegative() ? new Prisma.Decimal(0) : remaining;
+}
+
+/**
+ * Montant encaissé à la création de la vente :
+ * - vente à crédit : le premier versement (0 par défaut), au plus le total ;
+ * - autres modes : la vente est payée en totalité (un montant remis supérieur
+ *   au total est de la monnaie rendue, pas un encaissement).
+ */
+function initialPayment(data: SaleFormData, total: Prisma.Decimal): Prisma.Decimal {
+  if (data.modePaiement === PaymentMethod.CREDIT) {
+    const paid = new Prisma.Decimal(data.montantPaye ?? 0).toDecimalPlaces(2);
+    if (paid.greaterThan(total)) {
+      throw Errors.conflict("Le premier versement ne peut pas dépasser le total de la vente.");
+    }
+    return paid;
+  }
+  if (data.montantPaye !== undefined && new Prisma.Decimal(data.montantPaye).lessThan(total)) {
+    throw Errors.conflict("Paiement partiel : choisissez le mode « Crédit client ».");
+  }
+  return total;
+}
 
 /**
  * Enregistre une vente de bout en bout : vérifie que chaque produit appartient
@@ -33,6 +60,11 @@ export async function createSale(
     quantitiesByProduct.set(line.produitId, (quantitiesByProduct.get(line.produitId) ?? 0) + line.quantite);
   }
   const lines = [...quantitiesByProduct].map(([produitId, quantite]) => ({ produitId, quantite }));
+
+  // Une créance doit pouvoir être réclamée : le client est obligatoire.
+  if (data.modePaiement === PaymentMethod.CREDIT && !data.clientId) {
+    throw Errors.conflict("Sélectionnez le client pour une vente à crédit.");
+  }
 
   if (data.clientId) {
     const customer = await prisma.client.findFirst({
@@ -73,8 +105,7 @@ export async function createSale(
     const remise = new Prisma.Decimal(data.remise ?? 0);
     const totalBeforeFloor = sousTotal.minus(remise);
     const total = totalBeforeFloor.isNegative() ? new Prisma.Decimal(0) : totalBeforeFloor;
-    const montantPaye =
-      data.montantPaye !== undefined ? new Prisma.Decimal(data.montantPaye) : total;
+    const montantPaye = initialPayment(data, total);
 
     const sale = await tx.vente.create({
       data: {
@@ -97,6 +128,8 @@ export async function createSale(
             sousTotal: line.sousTotal,
           })),
         },
+        // Le paiement initial ouvre l'historique des paiements de la vente.
+        paiements: montantPaye.isZero() ? undefined : { create: { montant: montantPaye, utilisateurId: userId } },
       },
       include: saleInclude,
     });
@@ -158,5 +191,53 @@ export async function cancelSale(context: AuthContext, saleId: number): Promise<
       data: { statut: SaleStatus.CANCELLED, annuleLe: new Date() },
       include: saleInclude,
     });
+  });
+}
+
+/**
+ * Enregistre un versement d'un client sur une vente (remboursement d'une
+ * créance). Le paiement est historisé et le montant payé de la vente est
+ * augmenté dans la même transaction : reste = total − somme des paiements.
+ * Le chiffre d'affaires n'est pas touché, seul l'encaissé augmente.
+ */
+export async function addSalePayment(context: AuthContext, saleId: number, amount: number): Promise<SaleWithDetails> {
+  const { organizationId, userId } = context;
+  const montant = new Prisma.Decimal(amount).toDecimalPlaces(2);
+  if (!montant.greaterThan(0)) throw Errors.conflict("Le montant doit être supérieur à 0.");
+
+  return prisma.$transaction(async (tx) => {
+    const sale = await tx.vente.findFirst({
+      where: {
+        id: saleId,
+        organisationId: organizationId,
+        // Un membre limité à une boutique n'encaisse que les ventes de sa boutique.
+        ...(context.membershipStoreId ? { boutiqueId: context.membershipStoreId } : {}),
+      },
+      select: { id: true, statut: true, total: true, montantPaye: true },
+    });
+    if (!sale) throw Errors.notFound("Vente introuvable");
+    if (sale.statut === SaleStatus.CANCELLED) {
+      throw Errors.conflict("Cette vente est annulée : aucun paiement ne peut être enregistré.");
+    }
+
+    const remaining = remainingOf(sale);
+    if (remaining.isZero()) throw Errors.conflict("Cette vente est déjà réglée.");
+    if (montant.greaterThan(remaining)) {
+      throw Errors.conflict(`Le montant dépasse le reste à payer (${remaining.toNumber().toLocaleString("fr-FR")}).`);
+    }
+
+    // Mise à jour conditionnelle : si un autre paiement a été enregistré entre
+    // la lecture et l'écriture, rien n'est modifié et l'utilisateur réessaie.
+    const updated = await tx.vente.updateMany({
+      where: { id: sale.id, montantPaye: sale.montantPaye, statut: SaleStatus.COMPLETED },
+      data: { montantPaye: { increment: montant } },
+    });
+    if (updated.count !== 1) {
+      throw Errors.conflict("La vente vient d'être modifiée. Rechargez la page puis réessayez.");
+    }
+
+    await tx.paiementVente.create({ data: { venteId: sale.id, montant, utilisateurId: userId } });
+
+    return tx.vente.findUniqueOrThrow({ where: { id: sale.id }, include: saleInclude });
   });
 }

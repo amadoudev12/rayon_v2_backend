@@ -93,9 +93,11 @@ describe("createSale — enregistrement d'une vente", () => {
   it("enregistre un paiement partiel quand le montant payé est fourni", async () => {
     const shop = await createShop();
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1000 });
+    const client = await prisma.client.create({ data: { organisationId: shop.organisation.id, nom: "Awa" } });
 
     const sale = await createSale(shop.context, shop.boutique.id, {
       lignes: [{ produitId: produit.id, quantite: 2 }],
+      clientId: client.id,
       modePaiement: "CREDIT",
       remise: 0,
       montantPaye: 500,

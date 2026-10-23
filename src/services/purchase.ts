@@ -17,6 +17,10 @@ export type PurchaseWithDetails = Prisma.AchatGetPayload<{ include: typeof purch
  * Enregistre une livraison fournisseur : le stock est augmenté immédiatement
  * (réception à la saisie, sans étape « en attente ») et un mouvement de stock
  * est journalisé par ligne.
+ *
+ * Valorisation au dernier prix d'achat : le prix d'achat de chaque produit
+ * reçu devient le coût unitaire de cet achat. Les ventes suivantes figent ce
+ * nouveau coût sur leurs lignes ; les ventes passées gardent le leur.
  */
 export async function createPurchase(
   context: AuthContext,
@@ -48,6 +52,10 @@ export async function createPurchase(
     sousTotal: new Prisma.Decimal(line.coutUnitaire).times(line.quantite),
   }));
   const total = sumDecimals(lines.map((line) => line.sousTotal));
+  const montantPaye = data.montantPaye !== undefined ? new Prisma.Decimal(data.montantPaye).toDecimalPlaces(2) : total;
+  if (montantPaye.greaterThan(total)) {
+    throw Errors.conflict("Le montant payé ne peut pas dépasser le total de l'achat.");
+  }
 
   return prisma.$transaction(async (tx) => {
     const purchase = await tx.achat.create({
@@ -57,6 +65,7 @@ export async function createPurchase(
         fournisseurId: data.fournisseurId ?? null,
         creeParId: userId,
         total,
+        montantPaye,
         note: data.note || null,
         lignes: {
           create: lines.map((line) => ({
@@ -76,6 +85,7 @@ export async function createPurchase(
         create: { boutiqueId: storeId, produitId: line.produitId, quantite: line.quantite },
         update: { quantite: { increment: line.quantite } },
       });
+      await tx.produit.update({ where: { id: line.produitId }, data: { prixAchat: line.coutUnitaire } });
     }
 
     await tx.mouvementStock.createMany({

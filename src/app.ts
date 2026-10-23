@@ -16,6 +16,7 @@ import organizationRoutes from "@/routes/organization.routes";
 import pageRoutes from "@/routes/page.routes";
 import productRoutes from "@/routes/product.routes";
 import purchaseRoutes from "@/routes/purchase.routes";
+import quoteRoutes from "@/routes/quote.routes";
 import saleRoutes from "@/routes/sale.routes";
 import stockRoutes from "@/routes/stock.routes";
 import storeRoutes from "@/routes/store.routes";
@@ -52,6 +53,7 @@ export function createApp() {
   app.use("/api/dashboard", dashboardRoutes);
   app.use("/api/sales", saleRoutes);
   app.use("/api/purchases", purchaseRoutes);
+  app.use("/api/quotes", quoteRoutes);
   app.use("/api/customers", customerRoutes);
   app.use("/api/suppliers", supplierRoutes);
   app.use("/api/expenses", expenseRoutes);

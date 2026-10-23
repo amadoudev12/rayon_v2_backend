@@ -1,9 +1,12 @@
 import type { Request, Response } from "express";
 import * as saleService from "@/services/sale";
+import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
 import { prisma } from "@/lib/prisma";
 import { containsText } from "@/lib/search";
 import { resolveActiveStoreId } from "@/lib/auth/session";
-import { saleSchema } from "@/lib/validations/sale";
+import { can } from "@/lib/auth/permissions";
+import { parsePeriod } from "@/lib/period";
+import { salePaymentSchema, saleSchema } from "@/lib/validations/sale";
 import { recordAuditLog } from "@/lib/api/audit";
 import { jsonData, jsonPage, routeId, searchParams } from "@/lib/api/response";
 import { getPagination, paginationMeta } from "@/lib/api/pagination";
@@ -80,12 +83,48 @@ export async function getSaleById(req: Request, res: Response) {
       lignes: { include: { produit: { select: { id: true, nom: true, unite: true } } } },
       client: { select: { id: true, nom: true, telephone: true } },
       vendeur: { select: { id: true, prenom: true, nom: true } },
-      boutique: { select: { id: true, nom: true } },
+      // Coordonnées du magasin : en-tête du reçu.
+      boutique: { select: { id: true, nom: true, adresse: true, telephone: true, organisation: { select: { nom: true } } } },
+      paiements: {
+        orderBy: { date: "asc" },
+        include: { utilisateur: { select: { id: true, prenom: true, nom: true } } },
+      },
     },
   });
   if (!sale) throw Errors.notFound("Vente introuvable");
 
-  return jsonData(res, sale);
+  return jsonData(res, { ...sale, resteAPayer: saleService.remainingOf(sale) });
+}
+
+/** Statistiques de la boutique sur une période (`?periode=…`, voir lib/period). */
+export async function getSalesStatsSummary(req: Request, res: Response) {
+  const context = req.user;
+  const params = searchParams(req);
+
+  const storeId = await resolveActiveStoreId(context, Number(params.get("storeId")) || undefined);
+  const period = parsePeriod(params);
+  const stats = await getSalesStats(context, storeId, period);
+
+  return jsonData(res, { period, stats: visibleSalesStats(stats, can(context.role, "report:view")) });
+}
+
+export async function addSalePayment(req: Request, res: Response) {
+  const context = req.user;
+  const saleId = routeId(req);
+
+  const parsed = salePaymentSchema.parse(req.body);
+  const sale = await saleService.addSalePayment(context, saleId, parsed.montant);
+
+  await recordAuditLog({
+    organisationId: context.organizationId,
+    utilisateurId: context.userId,
+    action: "sale.payment_added",
+    entite: "Sale",
+    entiteId: saleId,
+    metadonnees: { montant: parsed.montant },
+  });
+
+  return jsonData(res, { ...sale, resteAPayer: saleService.remainingOf(sale) }, { status: 201 });
 }
 
 export async function cancelSale(req: Request, res: Response) {

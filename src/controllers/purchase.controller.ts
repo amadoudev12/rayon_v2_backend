@@ -58,7 +58,8 @@ export async function getPurchaseById(req: Request, res: Response) {
       lignes: { include: { produit: { select: { id: true, nom: true, unite: true } } } },
       fournisseur: { select: { id: true, nom: true, telephone: true } },
       creePar: { select: { id: true, prenom: true, nom: true } },
-      boutique: { select: { id: true, nom: true } },
+      // Coordonnées du magasin : en-tête du bon d'achat imprimé.
+      boutique: { select: { id: true, nom: true, adresse: true, telephone: true, organisation: { select: { nom: true } } } },
     },
   });
   if (!purchase) throw Errors.notFound("Achat introuvable");

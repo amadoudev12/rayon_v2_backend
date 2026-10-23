@@ -79,6 +79,8 @@ model Utilisateur {
   achats          Achat[]          @relation("AchatCreePar")
   depenses        Depense[]        @relation("DepenseCreePar")
   mouvementsStock MouvementStock[]
+  paiementsVente  PaiementVente[]
+  devis           Devis[]          @relation("DevisCreePar")
 
   creeLe         DateTime @default(now())
   modifieLe      DateTime @updatedAt
@@ -104,6 +106,7 @@ model Organisation {
   ventes        Vente[]
   achats        Achat[]
   depenses      Depense[]
+  devis         Devis[]
   journauxAudit JournalAudit[]
 
   creeLe    DateTime @default(now())
@@ -151,6 +154,7 @@ model Boutique {
   ventes          Vente[]
   achats          Achat[]
   depenses        Depense[]
+  devis           Devis[]
 
   creeLe         DateTime @default(now())
   modifieLe      DateTime @updatedAt
@@ -200,6 +204,7 @@ model Produit {
   mouvementsStock MouvementStock[]
   lignesVente     LigneVente[]
   lignesAchat     LigneAchat[]
+  lignesDevis     LigneDevis[]
 
   creeLe         DateTime @default(now())
   modifieLe      DateTime @updatedAt
@@ -268,6 +273,7 @@ model Client {
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   ventes         Vente[]
+  devis          Devis[]
 
   creeLe         DateTime @default(now())
   modifieLe      DateTime @updatedAt
@@ -304,6 +310,8 @@ model Vente {
   sousTotal       Decimal       @db.Decimal(12, 2)
   remise          Decimal       @db.Decimal(12, 2) @default(0)
   total           Decimal       @db.Decimal(12, 2)
+  /// Somme des paiements reçus (`paiements`), tenue à jour dans la même
+  /// transaction que chaque paiement. Reste à payer = total − montantPaye.
   montantPaye     Decimal       @db.Decimal(12, 2)
   note            String?
 
@@ -320,6 +328,7 @@ model Vente {
   vendeur         Utilisateur  @relation("VenteVendeur", fields: [vendeurId], references: [id])
 
   lignes          LigneVente[]
+  paiements       PaiementVente[]
   mouvementsStock MouvementStock[]
 
   creeLe          DateTime  @default(now())
@@ -331,6 +340,9 @@ model Vente {
   @@index([creeLe])
 }
 
+/// Prix et coût sont figés au moment de la vente : la marge d'une ancienne
+/// vente ne change jamais quand le prix d'achat du produit évolue.
+/// Coût total = coutUnitaire × quantite ; marge = sousTotal − coût total.
 model LigneVente {
   id            Int     @id @default(autoincrement())
   quantite      Int
@@ -347,6 +359,76 @@ model LigneVente {
   @@unique([venteId, produitId])
 }
 
+/// Un versement d'un client sur une vente : le paiement initial (comptant ou
+/// premier versement d'un crédit) puis chaque remboursement ultérieur. Un
+/// paiement n'est jamais une nouvelle vente : il ne touche que l'encaissé.
+model PaiementVente {
+  id            Int      @id @default(autoincrement())
+  montant       Decimal  @db.Decimal(12, 2)
+  date          DateTime @default(now())
+
+  venteId       Int
+  vente         Vente    @relation(fields: [venteId], references: [id], onDelete: Cascade)
+
+  utilisateurId Int?
+  utilisateur   Utilisateur? @relation(fields: [utilisateurId], references: [id], onDelete: SetNull)
+
+  @@index([venteId])
+  @@index([date])
+}
+
+// ---------------------------------------------------------------------------
+// Devis
+// ---------------------------------------------------------------------------
+
+/// Proposition de prix remise à un client. Un devis ne touche ni au stock, ni
+/// au chiffre d'affaires, ni aux créances.
+model Devis {
+  id              Int       @id @default(autoincrement())
+  sousTotal       Decimal   @db.Decimal(12, 2)
+  remise          Decimal   @db.Decimal(12, 2) @default(0)
+  total           Decimal   @db.Decimal(12, 2)
+  /// Nom saisi librement quand le client n'est pas enregistré.
+  nomClient       String?
+  valableJusquAu  DateTime?
+  note            String?
+
+  organisationId  Int
+  organisation    Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  boutiqueId      Int
+  boutique        Boutique     @relation(fields: [boutiqueId], references: [id], onDelete: Cascade)
+
+  clientId        Int?
+  client          Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  creeParId       Int
+  creePar         Utilisateur  @relation("DevisCreePar", fields: [creeParId], references: [id])
+
+  lignes          LigneDevis[]
+
+  creeLe          DateTime  @default(now())
+
+  @@index([organisationId, boutiqueId, creeLe])
+}
+
+model LigneDevis {
+  id            Int      @id @default(autoincrement())
+  /// Nom du produit au moment du devis : le devis reste lisible si le produit est supprimé.
+  designation   String
+  quantite      Int
+  prixUnitaire  Decimal  @db.Decimal(12, 2)
+  sousTotal     Decimal  @db.Decimal(12, 2)
+
+  devisId       Int
+  devis         Devis    @relation(fields: [devisId], references: [id], onDelete: Cascade)
+
+  produitId     Int?
+  produit       Produit? @relation(fields: [produitId], references: [id], onDelete: SetNull)
+
+  @@index([devisId])
+}
+
 // ---------------------------------------------------------------------------
 // Achats
 // ---------------------------------------------------------------------------
@@ -355,6 +437,8 @@ model Achat {
   id              Int            @id @default(autoincrement())
   statut          PurchaseStatus @default(RECEIVED)
   total           Decimal        @db.Decimal(12, 2)
+  /// Montant versé au fournisseur ; reste à payer = total − montantPaye.
+  montantPaye     Decimal        @db.Decimal(12, 2)
   note            String?
 
   organisationId  Int
