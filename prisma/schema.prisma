@@ -330,6 +330,7 @@ model Vente {
   lignes          LigneVente[]
   paiements       PaiementVente[]
   mouvementsStock MouvementStock[]
+  devis           Devis?
 
   creeLe          DateTime  @default(now())
   annuleLe        DateTime?
@@ -406,6 +407,11 @@ model Devis {
   creePar         Utilisateur  @relation("DevisCreePar", fields: [creeParId], references: [id])
 
   lignes          LigneDevis[]
+
+  /// Vente issue de ce devis. Un devis ne peut être transformé qu'une fois ;
+  /// le lien est retiré si la vente est annulée.
+  venteId         Int?         @unique
+  vente           Vente?       @relation(fields: [venteId], references: [id], onDelete: SetNull)
 
   creeLe          DateTime  @default(now())
 

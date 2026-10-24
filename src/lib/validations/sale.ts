@@ -4,6 +4,8 @@ import { PaymentMethod } from "@/generated/prisma/enums";
 export const saleItemSchema = z.object({
   produitId: z.coerce.number().int().positive("Produit invalide"),
   quantite: z.coerce.number().int().positive("La quantité doit être supérieure à 0"),
+  /** Prix unitaire négocié avec le client ; absent : prix de vente du produit. */
+  prixUnitaire: z.coerce.number().nonnegative("Le prix unitaire doit être positif ou nul.").optional(),
 });
 
 export const saleSchema = z.object({
@@ -15,6 +17,8 @@ export const saleSchema = z.object({
   /** Vente à crédit : premier versement (0 par défaut). Autres modes : la vente est payée en totalité. */
   montantPaye: z.coerce.number().nonnegative("Le montant payé doit être positif ou nul.").optional(),
   note: z.string().trim().optional().or(z.literal("")),
+  /** Devis transformé en cette vente. */
+  devisId: z.coerce.number().int().positive().optional().nullable(),
 });
 
 export type SaleFormData = z.infer<typeof saleSchema>;

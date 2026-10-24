@@ -15,6 +15,32 @@ const saleInclude = {
 
 export type SaleWithDetails = Prisma.VenteGetPayload<{ include: typeof saleInclude }>;
 
+/**
+ * Regroupe les lignes d'un même produit (quantités additionnées) et garde le
+ * prix négocié éventuel. Deux prix différents pour un même produit sont refusés.
+ */
+export function groupLines(lignes: SaleFormData["lignes"]) {
+  const byProduct = new Map<number, { produitId: number; quantite: number; prixUnitaire?: number }>();
+  for (const line of lignes) {
+    const existing = byProduct.get(line.produitId);
+    if (!existing) {
+      byProduct.set(line.produitId, { ...line });
+      continue;
+    }
+    if (line.prixUnitaire !== undefined && existing.prixUnitaire !== undefined && line.prixUnitaire !== existing.prixUnitaire) {
+      throw Errors.conflict("Un même produit ne peut pas avoir deux prix différents dans le panier.");
+    }
+    existing.quantite += line.quantite;
+    existing.prixUnitaire ??= line.prixUnitaire;
+  }
+  return [...byProduct.values()];
+}
+
+/** Prix appliqué à une ligne : le prix négocié s'il est fourni, sinon le prix de vente du produit. */
+export function unitPriceOf(line: { prixUnitaire?: number }, produit: { prixVente: Prisma.Decimal }): Prisma.Decimal {
+  return line.prixUnitaire !== undefined ? new Prisma.Decimal(line.prixUnitaire).toDecimalPlaces(2) : produit.prixVente;
+}
+
 /** Reste à payer d'une vente : total − somme des paiements (jamais négatif). */
 export function remainingOf(sale: { total: Prisma.Decimal; montantPaye: Prisma.Decimal }): Prisma.Decimal {
   const remaining = sale.total.minus(sale.montantPaye);
@@ -47,6 +73,10 @@ function initialPayment(data: SaleFormData, total: Prisma.Decimal): Prisma.Decim
  * refusée si une ligne manque de stock), fige le prix et le coût sur chaque
  * ligne et journalise un mouvement de stock par ligne, le tout dans une seule
  * transaction pour ne jamais laisser une vente à moitié appliquée.
+ *
+ * Le prix d'une ligne peut être négocié avec le client (`prixUnitaire`) ; la
+ * remise globale s'applique ensuite sur le sous-total. La marge est calculée
+ * sur le prix réellement pratiqué.
  */
 export async function createSale(
   context: AuthContext,
@@ -55,11 +85,7 @@ export async function createSale(
 ): Promise<SaleWithDetails> {
   const { organizationId, userId } = context;
 
-  const quantitiesByProduct = new Map<number, number>();
-  for (const line of data.lignes) {
-    quantitiesByProduct.set(line.produitId, (quantitiesByProduct.get(line.produitId) ?? 0) + line.quantite);
-  }
-  const lines = [...quantitiesByProduct].map(([produitId, quantite]) => ({ produitId, quantite }));
+  const lines = groupLines(data.lignes);
 
   // Une créance doit pouvoir être réclamée : le client est obligatoire.
   if (data.modePaiement === PaymentMethod.CREDIT && !data.clientId) {
@@ -87,8 +113,8 @@ export async function createSale(
 
     const saleLines = lines.map((line) => {
       const produit = productsById.get(line.produitId)!;
-      const sousTotal = produit.prixVente.times(line.quantite);
-      return { ...line, produit, sousTotal };
+      const prixUnitaire = unitPriceOf(line, produit);
+      return { ...line, produit, prixUnitaire, sousTotal: prixUnitaire.times(line.quantite) };
     });
 
     for (const line of saleLines) {
@@ -123,7 +149,7 @@ export async function createSale(
           create: saleLines.map((line) => ({
             produitId: line.produitId,
             quantite: line.quantite,
-            prixUnitaire: line.produit.prixVente,
+            prixUnitaire: line.prixUnitaire,
             coutUnitaire: line.produit.prixAchat,
             sousTotal: line.sousTotal,
           })),
@@ -145,13 +171,26 @@ export async function createSale(
       })),
     });
 
+    // Devis transformé : il est relié à la vente, une seule fois. Sinon toute
+    // la vente est annulée (stock compris) par l'échec de la transaction.
+    if (data.devisId) {
+      const linked = await tx.devis.updateMany({
+        where: { id: data.devisId, organisationId: organizationId, boutiqueId: storeId, venteId: null },
+        data: { venteId: sale.id },
+      });
+      if (linked.count !== 1) {
+        throw Errors.conflict("Ce devis est introuvable ou a déjà été transformé en vente.");
+      }
+    }
+
     return sale;
   });
 }
 
 /**
  * Annule une vente terminée : remet chaque ligne en stock et passe la vente
- * en CANCELLED. Ne peut pas être appliqué deux fois à la même vente.
+ * en CANCELLED. Ne peut pas être appliqué deux fois à la même vente. Le devis
+ * dont elle provenait redevient transformable.
  */
 export async function cancelSale(context: AuthContext, saleId: number): Promise<SaleWithDetails> {
   const { organizationId, userId } = context;
@@ -185,6 +224,8 @@ export async function cancelSale(context: AuthContext, saleId: number): Promise<
         note: "Annulation de vente",
       })),
     });
+
+    await tx.devis.updateMany({ where: { venteId: sale.id }, data: { venteId: null } });
 
     return tx.vente.update({
       where: { id: sale.id },

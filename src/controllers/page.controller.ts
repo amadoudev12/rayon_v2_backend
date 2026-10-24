@@ -280,11 +280,16 @@ export async function getSalesPage(req: Request, res: Response) {
   });
 }
 
+/**
+ * Nouvelle vente (et nouveau devis). Avec `?devis=ID`, le devis à transformer
+ * est joint : le panier est prérempli avec ses lignes, ses prix et sa remise.
+ */
 export async function getNewSalePage(req: Request, res: Response) {
   const context = req.user;
   const storeId = await getActiveStoreId(context);
+  const quoteId = Number(searchParams(req).get("devis")) || null;
 
-  const [products, customers, organization] = await Promise.all([
+  const [products, customers, organization, quote] = await Promise.all([
     prisma.produit.findMany({
       where: { organisationId: context.organizationId, actif: true },
       select: {
@@ -302,6 +307,18 @@ export async function getNewSalePage(req: Request, res: Response) {
       orderBy: { nom: "asc" },
     }),
     prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
+    quoteId
+      ? prisma.devis.findFirst({
+          where: { id: quoteId, organisationId: context.organizationId, boutiqueId: storeId },
+          select: {
+            id: true,
+            clientId: true,
+            remise: true,
+            venteId: true,
+            lignes: { select: { produitId: true, designation: true, quantite: true, prixUnitaire: true }, orderBy: { id: "asc" } },
+          },
+        })
+      : null,
   ]);
 
   const catalog = products.map(({ stocks, ...product }) => ({
@@ -310,7 +327,16 @@ export async function getNewSalePage(req: Request, res: Response) {
     quantiteStock: stocks[0]?.quantite ?? 0,
   }));
 
-  return jsonData(res, { products: catalog, customers, currency: organization.devise });
+  return jsonData(res, {
+    products: catalog,
+    customers,
+    currency: organization.devise,
+    quote: quote && {
+      ...quote,
+      remise: Number(quote.remise),
+      lignes: quote.lignes.map((line) => ({ ...line, prixUnitaire: Number(line.prixUnitaire) })),
+    },
+  });
 }
 
 /**
@@ -407,6 +433,7 @@ export async function getQuotesPage(req: Request, res: Response) {
         total: true,
         nomClient: true,
         valableJusquAu: true,
+        venteId: true,
         creeLe: true,
         client: { select: { id: true, nom: true } },
         creePar: { select: { prenom: true, nom: true } },

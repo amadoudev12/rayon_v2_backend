@@ -468,3 +468,145 @@ describe("API — paiements et statistiques", () => {
     expect(asOwner.body.data.period.key).toBe("month");
   });
 });
+
+describe("prix négocié par ligne et remise globale", () => {
+  it("applique le prix négocié à la ligne, puis la remise sur le sous-total ; la marge suit le prix réel", async () => {
+    const shop = await createShop();
+    const riz = await createProduit(shop.organisation.id, shop.boutique.id, { prixAchat: 6_000, prixVente: 10_000, stock: 10 });
+    const huile = await createProduit(shop.organisation.id, shop.boutique.id, { prixAchat: 1_500, prixVente: 2_000, stock: 10 });
+
+    const sale = await createSale(shop.context, shop.boutique.id, {
+      lignes: [
+        { produitId: riz.id, quantite: 2, prixUnitaire: 9_000 }, // négocié : 10 000 → 9 000
+        { produitId: huile.id, quantite: 3 }, // prix catalogue
+      ],
+      modePaiement: "CASH",
+      remise: 1_000,
+    });
+
+    const ligneRiz = sale.lignes.find((l) => l.produitId === riz.id)!;
+    expect(Number(ligneRiz.prixUnitaire)).toBe(9_000);
+    expect(Number(ligneRiz.sousTotal)).toBe(18_000);
+    expect(Number(ligneRiz.coutUnitaire)).toBe(6_000);
+    expect(Number(sale.sousTotal)).toBe(24_000); // 18 000 + 6 000
+    expect(Number(sale.total)).toBe(23_000); // remise globale de 1 000
+    expect(Number(sale.montantPaye)).toBe(23_000);
+
+    // Le catalogue n'est pas modifié par la négociation.
+    expect(Number((await prisma.produit.findUniqueOrThrow({ where: { id: riz.id } })).prixVente)).toBe(10_000);
+
+    const stats = await getSalesStats(shop.context, shop.boutique.id, today());
+    expect(stats.revenue).toBe(23_000);
+    expect(stats.costOfGoodsSold).toBe(16_500); // 2 × 6 000 + 3 × 1 500
+    expect(stats.grossMargin).toBe(6_500);
+  });
+
+  it("refuse un prix négatif ou deux prix différents pour un même produit", async () => {
+    const shop = await createShop();
+    const riz = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 10_000 });
+
+    const { saleSchema } = await import("@/lib/validations/sale");
+    expect(saleSchema.safeParse({ lignes: [{ produitId: riz.id, quantite: 1, prixUnitaire: -1 }] }).success).toBe(false);
+
+    await expect(
+      createSale(shop.context, shop.boutique.id, {
+        lignes: [
+          { produitId: riz.id, quantite: 1, prixUnitaire: 9_000 },
+          { produitId: riz.id, quantite: 1, prixUnitaire: 8_000 },
+        ],
+        modePaiement: "CASH",
+        remise: 0,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(await stockOf(shop.boutique.id, riz.id)).toBe(10);
+  });
+
+  it("un devis reprend aussi le prix négocié", async () => {
+    const shop = await createShop();
+    const riz = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 10_000 });
+
+    const quote = await createQuote(shop.context, shop.boutique.id, {
+      lignes: [{ produitId: riz.id, quantite: 3, prixUnitaire: 8_500 }],
+      remise: 500,
+    });
+
+    expect(Number(quote.lignes[0].prixUnitaire)).toBe(8_500);
+    expect(Number(quote.sousTotal)).toBe(25_500);
+    expect(Number(quote.total)).toBe(25_000);
+  });
+});
+
+describe("transformation d'un devis en vente", () => {
+  async function shopWithQuote() {
+    const shop = await createShop();
+    const client = await createClient(shop);
+    const riz = await createProduit(shop.organisation.id, shop.boutique.id, { prixAchat: 6_000, prixVente: 10_000, stock: 10 });
+    const quote = await createQuote(shop.context, shop.boutique.id, {
+      lignes: [{ produitId: riz.id, quantite: 3, prixUnitaire: 9_000 }],
+      clientId: client.id,
+      remise: 1_000,
+    });
+    // Le formulaire de vente reprend les lignes, les prix et la remise du devis.
+    const fromQuote = {
+      lignes: quote.lignes.map((line) => ({ produitId: line.produitId!, quantite: line.quantite, prixUnitaire: Number(line.prixUnitaire) })),
+      clientId: client.id,
+      remise: Number(quote.remise),
+      devisId: quote.id,
+    };
+    return { shop, client, riz, quote, fromQuote };
+  }
+
+  it("crée la vente (stock, CA, crédit) et relie le devis à cette vente", async () => {
+    const { shop, riz, quote, fromQuote } = await shopWithQuote();
+    expect(await stockOf(shop.boutique.id, riz.id)).toBe(10); // le devis n'a rien réservé
+
+    const sale = await createSale(shop.context, shop.boutique.id, { ...fromQuote, modePaiement: "CREDIT", montantPaye: 6_000 });
+
+    expect(Number(sale.total)).toBe(26_000); // 3 × 9 000 − 1 000
+    expect(Number(sale.lignes[0].prixUnitaire)).toBe(9_000);
+    expect(await stockOf(shop.boutique.id, riz.id)).toBe(7);
+    expect((await prisma.devis.findUniqueOrThrow({ where: { id: quote.id } })).venteId).toBe(sale.id);
+
+    const stats = await getSalesStats(shop.context, shop.boutique.id, today());
+    expect(stats).toMatchObject({ salesCount: 1, revenue: 26_000, collected: 6_000, outstanding: 20_000 });
+  });
+
+  it("refuse de transformer deux fois le même devis, sans toucher au stock", async () => {
+    const { shop, riz, fromQuote } = await shopWithQuote();
+    await createSale(shop.context, shop.boutique.id, { ...fromQuote, modePaiement: "CASH" });
+
+    await expect(createSale(shop.context, shop.boutique.id, { ...fromQuote, modePaiement: "CASH" })).rejects.toMatchObject({
+      status: 409,
+      message: "Ce devis est introuvable ou a déjà été transformé en vente.",
+    });
+    expect(await stockOf(shop.boutique.id, riz.id)).toBe(7); // seule la première vente a décrémenté
+    expect(await prisma.vente.count()).toBe(1);
+  });
+
+  it("annuler la vente rend le devis à nouveau transformable", async () => {
+    const { shop, quote, fromQuote } = await shopWithQuote();
+    const sale = await createSale(shop.context, shop.boutique.id, { ...fromQuote, modePaiement: "CASH" });
+
+    await cancelSale(shop.context, sale.id);
+    expect((await prisma.devis.findUniqueOrThrow({ where: { id: quote.id } })).venteId).toBeNull();
+
+    const again = await createSale(shop.context, shop.boutique.id, { ...fromQuote, modePaiement: "CASH" });
+    expect((await prisma.devis.findUniqueOrThrow({ where: { id: quote.id } })).venteId).toBe(again.id);
+  });
+
+  it("refuse le devis d'une autre organisation", async () => {
+    const { fromQuote } = await shopWithQuote();
+    const other = await createShop("Concurrent");
+    const produit = await createProduit(other.organisation.id, other.boutique.id);
+
+    await expect(
+      createSale(other.context, other.boutique.id, {
+        lignes: [{ produitId: produit.id, quantite: 1 }],
+        modePaiement: "CASH",
+        remise: 0,
+        devisId: fromQuote.devisId,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(await stockOf(other.boutique.id, produit.id)).toBe(10);
+  });
+});

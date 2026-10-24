@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { Errors } from "@/lib/api/errors";
 import { Prisma } from "@/generated/prisma/client";
 import { sumDecimals } from "@/lib/money";
+import { groupLines, unitPriceOf } from "@/services/sale";
 import type { AuthContext } from "@/lib/auth/session";
 import type { QuoteFormData } from "@/lib/validations/quote";
 
@@ -15,23 +16,22 @@ export const quoteInclude = {
 export type QuoteWithDetails = Prisma.DevisGetPayload<{ include: typeof quoteInclude }>;
 
 /**
- * Enregistre un devis : les prix de vente actuels des produits sont repris et
- * figés sur chaque ligne, la remise est déduite comme pour une vente. Un devis
- * ne réserve ni ne décrémente aucun stock et ne crée ni vente ni créance.
+ * Enregistre un devis : le prix de vente actuel des produits (ou le prix
+ * négocié de la ligne) est figé sur chaque ligne, la remise est déduite comme
+ * pour une vente. Un devis ne réserve ni ne décrémente aucun stock et ne crée
+ * ni vente ni créance.
  */
 export async function createQuote(context: AuthContext, storeId: number, data: QuoteFormData): Promise<QuoteWithDetails> {
   const { organizationId, userId } = context;
 
-  const quantitiesByProduct = new Map<number, number>();
-  for (const line of data.lignes) {
-    quantitiesByProduct.set(line.produitId, (quantitiesByProduct.get(line.produitId) ?? 0) + line.quantite);
-  }
+  const groupedLines = groupLines(data.lignes);
 
   const products = await prisma.produit.findMany({
-    where: { id: { in: [...quantitiesByProduct.keys()] }, organisationId: organizationId, actif: true },
+    where: { id: { in: groupedLines.map((line) => line.produitId) }, organisationId: organizationId, actif: true },
     select: { id: true, nom: true, prixVente: true },
   });
-  if (products.length !== quantitiesByProduct.size) {
+  const productsById = new Map(products.map((product) => [product.id, product]));
+  if (productsById.size !== groupedLines.length) {
     throw Errors.notFound("Un ou plusieurs produits sont introuvables ou inactifs");
   }
 
@@ -43,14 +43,15 @@ export async function createQuote(context: AuthContext, storeId: number, data: Q
     if (!customer) throw Errors.notFound("Client introuvable");
   }
 
-  const lines = products.map((product) => {
-    const quantite = quantitiesByProduct.get(product.id)!;
+  const lines = groupedLines.map((line) => {
+    const product = productsById.get(line.produitId)!;
+    const prixUnitaire = unitPriceOf(line, product);
     return {
       produitId: product.id,
       designation: product.nom,
-      quantite,
-      prixUnitaire: product.prixVente,
-      sousTotal: product.prixVente.times(quantite),
+      quantite: line.quantite,
+      prixUnitaire,
+      sousTotal: prixUnitaire.times(line.quantite),
     };
   });
   const sousTotal = sumDecimals(lines.map((line) => line.sousTotal));
