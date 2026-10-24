@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "start": "prisma migrate deploy && tsx src/server.ts",
     "build": "prisma generate && tsc --noEmit",
     "postinstall": "prisma generate",
     "lint": "eslint",
