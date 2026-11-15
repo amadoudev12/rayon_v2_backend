@@ -8,7 +8,7 @@ import {
   cancelSale,
   getSalesStatsSummary,
   addSalePayment,
-  requestRefund,
+  returnSaleItems,
   makeRefundPayout,
 } from "@/controllers/sale.controller";
 
@@ -21,7 +21,8 @@ router.get("/:id", verifyToken, getSaleById);
 router.post("/:id/cancel", verifyToken, requirePermission("sale:cancel"), cancelSale);
 // Encaisser un versement est un geste de caisse : mêmes rôles que la vente.
 router.post("/:id/payments", verifyToken, requirePermission("sale:create"), addSalePayment);
-router.post("/:id/refunds", verifyToken, requirePermission("refund:manage"), requestRefund);
+// Retour d'articles : avoir, remise en stock éventuelle et remboursement de l'excédent payé.
+router.post("/:id/returns", verifyToken, requirePermission("return:manage"), returnSaleItems);
 router.post("/refunds/:id/payouts", verifyToken, requirePermission("refund:manage"), makeRefundPayout);
 
 export default router;

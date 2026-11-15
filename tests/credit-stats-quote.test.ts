@@ -12,13 +12,14 @@ vi.mock("@/lib/auth/token", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { Role, SaleStatus } from "@/generated/prisma/enums";
 import { createApp } from "@/app";
-import { addSalePayment, cancelSale, createSale, remainingOf } from "@/services/sale";
+import { createSale } from "@/services/sale";
 import { getSalesStats } from "@/services/sale-stats";
+import { getFinancialSummary } from "@/services/finance";
 import { createPurchase } from "@/services/purchase";
 import { createQuote } from "@/services/quote";
 import { updateProduct } from "@/services/product";
 import { parsePeriod } from "@/lib/period";
-import { createMember, createProduit, createShop, resetDatabase, stockOf } from "./helpers/factories";
+import { cancel, createMember, createProduit, createShop, pay, resetDatabase, stockOf } from "./helpers/factories";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -67,7 +68,7 @@ describe("ventes comptant et à crédit — CA, encaissé, créances", () => {
     expect(stats.collected).toBe(50_000);
     expect(stats.outstanding).toBe(0);
     expect(stats.creditSales).toBe(0);
-    expect(Number(remainingOf(sale))).toBe(0);
+    expect(Number(sale.resteAPayer)).toBe(0);
     expect(sale.paiements.map((p) => Number(p.montant))).toEqual([50_000]);
   });
 
@@ -89,9 +90,9 @@ describe("ventes comptant et à crédit — CA, encaissé, créances", () => {
     expect(stats.grossMargin).toBe(40_000); // marge sur la vente complète
 
     // TEST 3 : deuxième paiement de 20 000.
-    let updated = await addSalePayment(shop.context, sale.id, 20_000);
+    let updated = await pay(shop.context, sale.id, 20_000);
     expect(Number(updated.montantPaye)).toBe(50_000);
-    expect(Number(remainingOf(updated))).toBe(50_000);
+    expect(Number(updated.resteAPayer)).toBe(50_000);
     stats = await getSalesStats(shop.context, shop.boutique.id, today());
     expect(stats.collected).toBe(50_000);
     expect(stats.outstanding).toBe(50_000);
@@ -99,9 +100,9 @@ describe("ventes comptant et à crédit — CA, encaissé, créances", () => {
     expect(stats.salesCount).toBe(1);
 
     // TEST 4 : paiements restants jusqu'à 0.
-    await addSalePayment(shop.context, sale.id, 30_000);
-    updated = await addSalePayment(shop.context, sale.id, 20_000);
-    expect(Number(remainingOf(updated))).toBe(0);
+    await pay(shop.context, sale.id, 30_000);
+    updated = await pay(shop.context, sale.id, 20_000);
+    expect(Number(updated.resteAPayer)).toBe(0);
     expect(updated.paiements.map((p) => Number(p.montant))).toEqual([30_000, 20_000, 30_000, 20_000]);
 
     stats = await getSalesStats(shop.context, shop.boutique.id, today());
@@ -123,22 +124,22 @@ describe("ventes comptant et à crédit — CA, encaissé, créances", () => {
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 100_000, stock: 5 });
     const sale = await sell(shop, produit.id, 1, { credit: { clientId: client.id, montantPaye: 30_000 } });
 
-    await expect(addSalePayment(shop.context, sale.id, 70_001)).rejects.toMatchObject({ status: 409 });
-    await expect(addSalePayment(shop.context, sale.id, -5_000)).rejects.toMatchObject({ status: 409 });
-    await expect(addSalePayment(shop.context, sale.id, 0)).rejects.toMatchObject({ status: 409 });
+    await expect(pay(shop.context, sale.id, 70_001)).rejects.toMatchObject({ status: 409 });
+    await expect(pay(shop.context, sale.id, -5_000)).rejects.toMatchObject({ status: 409 });
+    await expect(pay(shop.context, sale.id, 0)).rejects.toMatchObject({ status: 409 });
     // Rien n'a été enregistré.
     expect(await prisma.paiementVente.count({ where: { venteId: sale.id } })).toBe(1);
     expect(Number((await prisma.vente.findUniqueOrThrow({ where: { id: sale.id } })).montantPaye)).toBe(30_000);
 
-    await addSalePayment(shop.context, sale.id, 70_000);
-    await expect(addSalePayment(shop.context, sale.id, 1)).rejects.toMatchObject({
+    await pay(shop.context, sale.id, 70_000);
+    await expect(pay(shop.context, sale.id, 1)).rejects.toMatchObject({
       status: 409,
       message: "Cette vente est déjà réglée.",
     });
 
     const other = await sell(shop, produit.id, 1, { credit: { clientId: client.id, montantPaye: 0 } });
-    await cancelSale(shop.context, other.id);
-    await expect(addSalePayment(shop.context, other.id, 1_000)).rejects.toMatchObject({ status: 409 });
+    await cancel(shop.context, other.id);
+    await expect(pay(shop.context, other.id, 1_000)).rejects.toMatchObject({ status: 409 });
   });
 
   it("refuse un premier versement supérieur au total, un crédit sans client et un paiement partiel hors crédit", async () => {
@@ -180,7 +181,7 @@ describe("ventes comptant et à crédit — CA, encaissé, créances", () => {
     tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
     await backdateSale(oldSale.id, tenDaysAgo);
 
-    await addSalePayment(shop.context, oldSale.id, 70_000);
+    await pay(shop.context, oldSale.id, 70_000);
     const stats = await getSalesStats(shop.context, shop.boutique.id, today());
 
     expect(stats.salesCount).toBe(0);
@@ -192,16 +193,20 @@ describe("ventes comptant et à crédit — CA, encaissé, créances", () => {
     expect(stats.outstanding).toBe(0);
   });
 
-  it("une vente annulée sort du CA, de l'encaissé et des créances", async () => {
+  it("une vente annulée sort du CA et des créances ; l'acompte reçu reste encaissé et devient un remboursement dû", async () => {
     const shop = await createShop();
     const client = await createClient(shop);
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 100_000 });
 
     const sale = await sell(shop, produit.id, 1, { credit: { clientId: client.id, montantPaye: 30_000 } });
-    await cancelSale(shop.context, sale.id);
+    await cancel(shop.context, sale.id);
     const stats = await getSalesStats(shop.context, shop.boutique.id, today());
 
-    expect(stats).toMatchObject({ salesCount: 0, revenue: 0, collected: 0, creditSales: 0, outstanding: 0 });
+    // Calcul manuel : 30 000 reçus aujourd'hui, rien rendu pour l'instant.
+    expect(stats).toMatchObject({
+      salesCount: 0, revenue: 0, creditSales: 0, outstanding: 0,
+      collected: 30_000, refunded: 0, netCollected: 30_000, pendingRefund: 30_000,
+    });
   });
 });
 
@@ -301,10 +306,20 @@ describe("coût historique, marge brute et bénéfice", () => {
       ],
     });
 
+    // Vue boutique : seules les dépenses de la boutique (3 000) ; la charge
+    // générale (2 000) est montrée à part, jamais imputée en entier.
     stats = await getSalesStats(shop.context, shop.boutique.id, today());
-    expect(stats.expensesTotal).toBe(5_000);
-    expect(stats.netProfit).toBe(8_000);
-    expect(stats.netProfit).toBe(stats.grossMargin - stats.expensesTotal);
+    expect(stats.expensesTotal).toBe(3_000);
+    expect(stats.generalExpenses).toBe(2_000);
+    expect(stats.generalExpensesIncluded).toBe(false);
+    expect(stats.netProfit).toBe(10_000);
+    expect(stats.netProfit).toBe(stats.grossMargin - stats.expensesTotal - stats.lossesTotal);
+
+    // Vue organisation : 3 000 + 2 000 + 9 000 de l'annexe = 14 000 ; 13 000 − 14 000 = −1 000.
+    const org = await getFinancialSummary({ organisationId: shop.organisation.id, storeId: null }, today());
+    expect(org.expensesTotal).toBe(14_000);
+    expect(org.generalExpensesIncluded).toBe(true);
+    expect(org.netProfit).toBe(-1_000);
   });
 
   it("TEST 14 — chaque période ne compte que ses propres ventes, paiements et dépenses", async () => {
@@ -333,7 +348,8 @@ describe("coût historique, marge brute et bénéfice", () => {
       shop.boutique.id,
       parsePeriod(new URLSearchParams({ periode: "yesterday" })),
     );
-    expect(statsYesterday).toMatchObject({ salesCount: 1, revenue: 2_000, collected: 2_000, expensesTotal: 300, netProfit: 500 });
+    // La dépense d'hier est une charge générale (sans boutique) : montrée à part en vue boutique.
+    expect(statsYesterday).toMatchObject({ salesCount: 1, revenue: 2_000, collected: 2_000, expensesTotal: 0, generalExpenses: 300, netProfit: 800 });
 
     const custom = parsePeriod(new URLSearchParams({ periode: "custom", du: toKey(longAgo), au: toKey(longAgo) }));
     const statsCustom = await getSalesStats(shop.context, shop.boutique.id, custom);
@@ -594,7 +610,7 @@ describe("transformation d'un devis en vente", () => {
     const { shop, quote, fromQuote } = await shopWithQuote();
     const sale = await createSale(shop.context, shop.boutique.id, { ...fromQuote, modePaiement: "CASH" });
 
-    await cancelSale(shop.context, sale.id);
+    await cancel(shop.context, sale.id);
     expect((await prisma.devis.findUniqueOrThrow({ where: { id: quote.id } })).venteId).toBeNull();
 
     const again = await createSale(shop.context, shop.boutique.id, { ...fromQuote, modePaiement: "CASH" });

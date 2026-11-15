@@ -18,7 +18,7 @@ import {
   requireUserId,
   SESSION_EXPIRED_PATH,
 } from "@/lib/auth/session";
-import { createSale, cancelSale } from "@/services/sale";
+import { createSale } from "@/services/sale";
 import { getPlatformActivity, getPlatformAlerts, getPlatformAnalytics, getPlatformOverview } from "@/services/platform";
 import {
   createOrganizationWithOwner,
@@ -29,7 +29,7 @@ import {
   setUserActive,
 } from "@/services/platform-admin";
 import { createApp } from "@/app";
-import { createMember, createProduit, createShop, resetDatabase } from "./helpers/factories";
+import { cancel, createMember, createProduit, createShop, resetDatabase } from "./helpers/factories";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -220,7 +220,7 @@ describe("statistiques de la plateforme", () => {
     await sell(b, pb.id, 2); // 4 000 XOF
     await sell(b, pb.id, 1); // 2 000 XOF
     await sell(euro, pe.id, 4); // 40 EUR : jamais additionné aux XOF
-    await cancelSale(a.context, (await sell(a, pa.id, 10)).id); // annulée : ignorée
+    await cancel(a.context, (await sell(a, pa.id, 10)).id); // annulée : ignorée
 
     const overview = await getPlatformOverview({ range: "30d" });
 
@@ -332,7 +332,7 @@ describe("statistiques de la plateforme", () => {
       remise: 0,
     });
     await sell(shop, produit.id, 4);
-    await cancelSale(shop.context, (await sell(shop, produit.id, 1)).id);
+    await cancel(shop.context, (await sell(shop, produit.id, 1)).id);
 
     const analytics = await getPlatformAnalytics({ range: "30d" });
 
@@ -362,7 +362,7 @@ describe("gestion des boutiques et des utilisateurs", () => {
     await sell(a, pa.id, 2);
     await sell(a, pa.id, 1);
     await sell(b, pb.id, 1);
-    await cancelSale(b.context, (await sell(b, pb.id, 9)).id);
+    await cancel(b.context, (await sell(b, pb.id, 9)).id);
 
     const byRevenue = await listOrganizations({ sort: "revenue", order: "desc", pagination: page });
     expect(byRevenue.total).toBe(2);
@@ -514,7 +514,7 @@ describe("activité récente de la plateforme", () => {
     const shop = await createShop("Alpha");
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { nom: "Riz", stock: 50 });
     const sale = await sell(shop, produit.id, 1);
-    await cancelSale(shop.context, sale.id);
+    await cancel(shop.context, sale.id);
     await setOrganizationActive(admin.id, shop.organisation.id, false);
 
     const { events } = await getPlatformActivity({ limit: 20 });

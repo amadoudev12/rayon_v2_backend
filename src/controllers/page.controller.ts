@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import * as dashboardService from "@/services/dashboard";
 import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
-import { remainingOf } from "@/services/sale";
+import { saleSummarySelect, serializeSaleSummary } from "@/lib/serializers/sale";
 import { PaymentMethod, SaleStatus, StockMovementType } from "@/generated/prisma/enums";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -79,14 +79,12 @@ export async function getDashboardPage(req: Request, res: Response) {
   const [organization, store, stats, totalProducts, totalSales] = await Promise.all([
     prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
     prisma.boutique.findUniqueOrThrow({ where: { id: storeId }, select: { nom: true } }),
-    dashboardService.getDashboardStats(context, storeId),
+    dashboardService.getDashboardStats(context, storeId, can(context.role, "report:view")),
     prisma.produit.count({ where: { organisationId: context.organizationId } }),
     prisma.vente.count({ where: { organisationId: context.organizationId } }),
   ]);
 
-  const visibleStats = can(context.role, "report:view") ? stats : { ...stats, costOfGoodsSold: null, grossMargin: null, grossMarginRate: null, expensesTotal: null, netProfit: null,
-    recentActivity: stats.recentActivity.filter((activity) => activity.type !== "expense") };
-  return jsonData(res, { currency: organization.devise, storeName: store.nom, stats: visibleStats, totalProducts, totalSales });
+  return jsonData(res, { currency: organization.devise, storeName: store.nom, stats, totalProducts, totalSales });
 }
 
 export async function getProductsPage(req: Request, res: Response) {
@@ -259,11 +257,7 @@ export async function getSalesPage(req: Request, res: Response) {
       orderBy: { creeLe: "desc" },
       skip: (pagination.page - 1) * pagination.limit,
       take: pagination.limit,
-      include: {
-        lignes: { select: { id: true, quantite: true, produit: { select: { id: true, nom: true } } } },
-        client: { select: { id: true, nom: true } },
-        vendeur: { select: { id: true, prenom: true, nom: true } },
-      },
+      select: saleSummarySelect,
     }),
     prisma.vente.count({ where }),
     prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
@@ -271,17 +265,10 @@ export async function getSalesPage(req: Request, res: Response) {
   ]);
 
   // On ne garde que les champs utilisés par le tableau des ventes.
-  const salesForClient = sales.map((sale) => ({
-    id: sale.id,
-    statut: sale.statut,
-    modePaiement: sale.modePaiement,
-    total: Number(sale.total),
-    resteAPayer: Number(remainingOf(sale)),
-    creeLe: sale.creeLe,
-    lignes: sale.lignes,
-    client: sale.client,
-    vendeur: sale.vendeur,
-  }));
+  const salesForClient = sales.map((sale) => {
+    const summary = serializeSaleSummary(sale);
+    return { ...summary, total: Number(sale.total), resteAPayer: Number(sale.resteAPayer), remboursementEnAttente: Number(summary.remboursementEnAttente) };
+  });
 
   return jsonData(res, {
     sales: salesForClient,
@@ -289,6 +276,8 @@ export async function getSalesPage(req: Request, res: Response) {
     stats: visibleSalesStats(stats, canViewFinance),
     canCancel,
     canCollect: can(context.role, "sale:create"),
+    canReturn: can(context.role, "return:manage"),
+    canRefund: can(context.role, "refund:manage"),
     currency: organization.devise,
     page: pagination.page,
     totalPages: paginationMeta(pagination, total).totalPages,
@@ -368,7 +357,7 @@ export async function getCreditsPage(req: Request, res: Response) {
   const search = params.get("search")?.trim() ?? "";
   const status = params.get("statut") ?? "en_cours";
   const pagination = getPagination(params, 10);
-  const unpaid = { montantPaye: { lt: prisma.vente.fields.total } };
+  const unpaid = { resteAPayer: { gt: 0 } };
 
   const credits = {
     organisationId: context.organizationId,
@@ -379,7 +368,7 @@ export async function getCreditsPage(req: Request, res: Response) {
   const where = {
     ...credits,
     AND: [
-      status === "reglee" ? { montantPaye: { gte: prisma.vente.fields.total } } : status === "toutes" ? {} : unpaid,
+      status === "reglee" ? { resteAPayer: 0 } : status === "toutes" ? {} : unpaid,
       search ? { client: { nom: containsText(search) } } : {},
     ],
   };
@@ -394,13 +383,15 @@ export async function getCreditsPage(req: Request, res: Response) {
         id: true,
         total: true,
         montantPaye: true,
+        montantRetourne: true,
+        resteAPayer: true,
         creeLe: true,
         client: { select: { id: true, nom: true, telephone: true } },
         paiements: { orderBy: { date: "desc" }, take: 1, select: { date: true } },
       },
     }),
     prisma.vente.count({ where }),
-    prisma.vente.aggregate({ where: { ...credits, ...unpaid }, _sum: { total: true, montantPaye: true }, _count: true }),
+    prisma.vente.aggregate({ where: { ...credits, ...unpaid }, _sum: { resteAPayer: true }, _count: true }),
     prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
   ]);
 
@@ -409,14 +400,18 @@ export async function getCreditsPage(req: Request, res: Response) {
       ...sale,
       total: Number(sale.total),
       montantPaye: Number(sale.montantPaye),
-      resteAPayer: Number(remainingOf(sale)),
+      montantRetourne: Number(sale.montantRetourne),
+      resteAPayer: Number(sale.resteAPayer),
       dernierPaiement: paiements[0]?.date ?? null,
     })),
     summary: {
-      outstanding: Number(outstanding._sum.total ?? 0) - Number(outstanding._sum.montantPaye ?? 0),
+      outstanding: Number(outstanding._sum.resteAPayer ?? 0),
       count: outstanding._count,
     },
     canCollect: can(context.role, "sale:create"),
+    canReturn: can(context.role, "return:manage"),
+    canRefund: can(context.role, "refund:manage"),
+    canViewFinance: can(context.role, "report:view"),
     currency: organization.devise,
     page: pagination.page,
     totalPages: paginationMeta(pagination, total).totalPages,

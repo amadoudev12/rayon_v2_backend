@@ -17,8 +17,5 @@ export async function getDashboard(req: Request, res: Response) {
       ? await resolveActiveStoreId(context, requestedStoreId)
       : null;
 
-  const stats = await dashboardService.getDashboardStats(context, storeId);
-  if (can(context.role, "report:view")) return jsonData(res, stats);
-  return jsonData(res, { ...stats, costOfGoodsSold: null, grossMargin: null, grossMarginRate: null, expensesTotal: null, netProfit: null,
-    recentActivity: stats.recentActivity.filter((activity) => activity.type !== "expense") });
+  return jsonData(res, await dashboardService.getDashboardStats(context, storeId, can(context.role, "report:view")));
 }

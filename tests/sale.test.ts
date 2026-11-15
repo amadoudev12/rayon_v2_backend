@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { createSale, cancelSale, createRefundRequest, payRefund } from "@/services/sale";
+import { createSale, payRefund } from "@/services/sale";
 import { SaleStatus, StockMovementType } from "@/generated/prisma/enums";
-import { createProduit, createShop, resetDatabase, stockOf } from "./helpers/factories";
+import { cancel, createProduit, createShop, resetDatabase, stockOf, testKey } from "./helpers/factories";
 
 beforeEach(resetDatabase);
 
@@ -203,7 +203,7 @@ describe("cancelSale — annulation d'une vente", () => {
     const { shop, produit, sale } = await shopWithSale();
     expect(await stockOf(shop.boutique.id, produit.id)).toBe(6);
 
-    const cancelled = await cancelSale(shop.context, sale.id);
+    const cancelled = await cancel(shop.context, sale.id);
 
     expect(cancelled.statut).toBe(SaleStatus.CANCELLED);
     expect(cancelled.annuleLe).toBeInstanceOf(Date);
@@ -219,9 +219,9 @@ describe("cancelSale — annulation d'une vente", () => {
 
   it("refuse d'annuler deux fois la même vente (le stock n'est recrédité qu'une fois)", async () => {
     const { shop, produit, sale } = await shopWithSale();
-    await cancelSale(shop.context, sale.id);
+    await cancel(shop.context, sale.id);
 
-    await expect(cancelSale(shop.context, sale.id)).rejects.toMatchObject({ status: 409 });
+    await expect(cancel(shop.context, sale.id)).rejects.toMatchObject({ status: 409 });
     expect(await stockOf(shop.boutique.id, produit.id)).toBe(10);
   });
 
@@ -229,7 +229,7 @@ describe("cancelSale — annulation d'une vente", () => {
     const { shop, produit, sale } = await shopWithSale();
     const other = await createShop("Concurrent");
 
-    await expect(cancelSale(other.context, sale.id)).rejects.toMatchObject({ status: 404 });
+    await expect(cancel(other.context, sale.id)).rejects.toMatchObject({ status: 404 });
     expect(await stockOf(shop.boutique.id, produit.id)).toBe(6);
   });
 });
@@ -240,23 +240,26 @@ describe("remboursements", () => {
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1000, stock: 4 });
     const client = await prisma.client.create({ data: { organisationId: shop.organisation.id, nom: "Client" } });
     const sale = await createSale(shop.context, shop.boutique.id, { lignes: [{ produitId: produit.id, quantite: 1 }], modePaiement: "CREDIT", clientId: client.id, montantPaye: 250, remise: 0 });
-    const cancelled = await cancelSale(shop.context, sale.id, "Commande annulée");
+    const cancelled = await cancel(shop.context, sale.id, { motif: "Commande annulée" });
     expect(Number(cancelled.remboursements[0].montant)).toBe(250);
     expect(cancelled.remboursements[0].statut).toBe("PENDING");
   });
 
-  it("garde une demande en attente puis trace les remboursements partiels jusqu'au solde", async () => {
+  it("garde la demande en attente puis trace les versements partiels jusqu'au solde", async () => {
     const shop = await createShop();
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1000, stock: 4 });
     const sale = await createSale(shop.context, shop.boutique.id, { lignes: [{ produitId: produit.id, quantite: 1 }], modePaiement: "CASH", remise: 0 });
-    const request = await createRefundRequest(shop.context, sale.id, 700, "Retour partiel", "refund-test-0001");
+    const cancelled = await cancel(shop.context, sale.id, { motif: "Client parti" });
+    const request = cancelled.remboursements[0]!;
     expect(request.statut).toBe("PENDING");
+    expect(Number(request.montant)).toBe(1000);
 
-    const first = await payRefund(shop.context, request.id, 200, "CASH", "payout-test-0001");
-    expect(first.statut).toBe("PARTIALLY_REFUNDED");
-    const completed = await payRefund(shop.context, request.id, 500, "MOBILE_MONEY", "payout-test-0002");
-    expect(completed.statut).toBe("COMPLETED");
-    expect(completed.versements).toHaveLength(2);
-    await expect(createRefundRequest(shop.context, sale.id, 400, "Dépassement", "refund-test-0002")).rejects.toMatchObject({ status: 409 });
+    const first = await payRefund(shop.context, request.id, 200, "CASH", testKey());
+    expect(first.remboursements[0]!.statut).toBe("PARTIALLY_REFUNDED");
+    const completed = await payRefund(shop.context, request.id, 800, "MOBILE_MONEY", testKey());
+    expect(completed.remboursements[0]!.statut).toBe("COMPLETED");
+    expect(completed.remboursements[0]!.versements).toHaveLength(2);
+    await expect(payRefund(shop.context, request.id, 1, "CASH", testKey())).rejects.toMatchObject({ status: 409 });
   });
+
 });

@@ -29,6 +29,8 @@ export const PERMISSIONS = {
   "sale:create": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.SELLER],
   "sale:cancel": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "refund:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER],
+  /** Retour d'articles vendus (avoir, remise en stock, remboursement). */
+  "return:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "expense:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "report:view": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
 } as const;

@@ -1,8 +1,10 @@
-import { prisma } from "@/lib/prisma";
+import { Prisma } from "@/generated/prisma/client";
 import { SaleStatus } from "@/generated/prisma/enums";
+import { prisma } from "@/lib/prisma";
 import { toNumber } from "@/lib/money";
 import { addDateKeyDays, dateKeyAt, startOfDateKey, zonedMonthKey } from "@/lib/timezone";
 import type { AuthContext } from "@/lib/auth/session";
+import { getFinancialSummary, getNetRevenue, visibleFinancials } from "@/services/finance";
 
 const TREND_DAYS = 7;
 const LOW_STOCK_LIST_SIZE = 8;
@@ -11,21 +13,13 @@ const TOP_PRODUCTS_SIZE = 5;
 export type DashboardStats = Awaited<ReturnType<typeof getDashboardStats>>;
 
 /**
- * Agrège les chiffres dont un commerçant a réellement besoin, limités à son
- * organisation (et éventuellement à une seule boutique). Chaque lecture passe
- * par `organisationId`/`boutiqueId` : on ne fait confiance au client que pour
- * le choix de la boutique à afficher.
- *
- * Règles de calcul :
- * - seules les ventes terminées (COMPLETED) comptent, jamais les annulées ;
- * - le chiffre d'affaires est le `total` des ventes, donc remises déduites ;
- * - la marge brute = chiffre d'affaires − coût d'achat des articles vendus
- *   (coût figé sur chaque ligne au moment de la vente) ;
- * - le bénéfice net = marge brute − dépenses de la période ;
- * - les dépenses d'une boutique incluent les dépenses générales de
- *   l'organisation (sans boutique), qui concernent toutes les boutiques.
+ * Tableau de bord d'une organisation (toutes boutiques si `storeId` est
+ * null). Les chiffres financiers viennent de `services/finance` — la même
+ * fonction que la page Ventes — pour le mois en cours et pour aujourd'hui.
+ * Les coûts, marges, charges, pertes et résultats sont masqués (null) sans
+ * la permission `report:view`.
  */
-export async function getDashboardStats(context: AuthContext, storeId: number | null) {
+export async function getDashboardStats(context: AuthContext, storeId: number | null, canViewFinance: boolean) {
   const organisationId = context.organizationId;
   const now = new Date();
   const organization = await prisma.organisation.findUniqueOrThrow({ where: { id: organisationId }, select: { fuseauHoraire: true } });
@@ -33,12 +27,12 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
   const todayKey = dateKeyAt(now, timeZone);
   const monthKeyLocal = zonedMonthKey(now, timeZone);
   const startOfToday = startOfDateKey(todayKey, timeZone);
+  const startOfTomorrow = startOfDateKey(addDateKeyDays(todayKey, 1), timeZone);
   const startOfMonth = startOfDateKey(`${monthKeyLocal}-01`, timeZone);
-  const startOfTrend = startOfDateKey(addDateKeyDays(todayKey, -(TREND_DAYS - 1)), timeZone);
+  const trendStartKey = addDateKeyDays(todayKey, -(TREND_DAYS - 1));
+  const startOfTrend = startOfDateKey(trendStartKey, timeZone);
 
-  // Même durée écoulée, mais sur le mois précédent (ex : du 1er au 30 à 14h),
-  // pour comparer des périodes équivalentes et non un mois entier à un mois
-  // en cours.
+  // Même durée écoulée, mais sur le mois précédent, pour comparer des périodes équivalentes.
   const [year, month] = monthKeyLocal.split("-").map(Number);
   const previousMonthKey = month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`;
   const startOfPreviousMonth = startOfDateKey(`${previousMonthKey}-01`, timeZone);
@@ -46,74 +40,73 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
     Math.min(startOfPreviousMonth.getTime() + (now.getTime() - startOfMonth.getTime()), startOfMonth.getTime()),
   );
 
-  const saleScope = storeId ? { organisationId, boutiqueId: storeId } : { organisationId };
-  const completed = { ...saleScope, statut: SaleStatus.COMPLETED };
-  const monthSaleWhere = { ...completed, creeLe: { gte: startOfMonth } };
-  const expenseScope = {
-    organisationId,
-    ...(storeId ? { OR: [{ boutiqueId: storeId }, { boutiqueId: null }] } : {}),
-  };
+  const scope = { organisationId, storeId };
+  const storeSql = (alias: string) => (storeId === null ? Prisma.empty : Prisma.sql`AND ${Prisma.raw(`${alias}."boutiqueId"`)} = ${storeId}`);
 
   const [
-    monthSales,
-    previousSales,
-    todaySales,
-    todayCollected,
-    todayRefunded,
-    pendingRefunds,
-    monthCostLines,
-    monthExpenses,
+    monthSummary,
+    todaySummary,
+    previousRevenue,
     activeProductsCount,
-    stockRows,
-    storeThresholds,
+    lowStockCounts,
+    lowStockRows,
     topProductRows,
-    trendSales,
+    trendSalesRows,
+    trendReturnRows,
     recentSales,
     recentExpenses,
   ] = await Promise.all([
-    prisma.vente.aggregate({ where: monthSaleWhere, _sum: { total: true }, _count: true }),
-    prisma.vente.aggregate({
-      where: { ...completed, creeLe: { gte: startOfPreviousMonth, lt: endOfPreviousPeriod } },
-      _sum: { total: true },
-    }),
-    prisma.vente.aggregate({ where: { ...completed, creeLe: { gte: startOfToday } }, _sum: { total: true }, _count: true }),
-    prisma.paiementVente.aggregate({ where: { date: { gte: startOfToday }, vente: saleScope }, _sum: { montant: true } }),
-    prisma.versementRemboursement.aggregate({ where: { date: { gte: startOfToday }, remboursementVente: { vente: saleScope } }, _sum: { montant: true } }),
-    prisma.remboursementVente.findMany({ where: { vente: saleScope, statut: { not: "COMPLETED" } }, include: { versements: { select: { montant: true } } } }),
-    prisma.ligneVente.findMany({
-      where: { vente: monthSaleWhere },
-      select: { quantite: true, coutUnitaire: true },
-    }),
-    prisma.depense.aggregate({
-      where: { ...expenseScope, date: { gte: startOfMonth }, statut: "ACTIVE" },
-      _sum: { montant: true },
-    }),
+    getFinancialSummary(scope, { start: startOfMonth, end: startOfTomorrow }),
+    getFinancialSummary(scope, { start: startOfToday, end: startOfTomorrow }),
+    getNetRevenue(scope, { start: startOfPreviousMonth, end: endOfPreviousPeriod }),
     prisma.produit.count({ where: { organisationId, actif: true } }),
-    prisma.stock.findMany({
-      where: {
-        ...(storeId ? { boutiqueId: storeId } : { boutique: { organisationId } }),
-        produit: { organisationId, actif: true },
-      },
-      select: {
-        quantite: true,
-        produit: { select: { id: true, nom: true, unite: true, seuilAlerte: true } },
-        boutique: { select: { id: true, nom: true } },
-      },
-    }),
-    prisma.seuilStockBoutique.findMany({ where: { organisationId, ...(storeId ? { boutiqueId: storeId } : {}) }, select: { boutiqueId: true, produitId: true, seuilAlerte: true } }),
-    prisma.ligneVente.groupBy({
-      by: ["produitId"],
-      where: { vente: monthSaleWhere },
-      _sum: { quantite: true, sousTotal: true },
-      orderBy: { _sum: { quantite: "desc" } },
-      take: TOP_PRODUCTS_SIZE,
-    }),
+    prisma.$queryRaw<{ low: bigint; out: bigint }[]>`
+      SELECT COUNT(*) AS low, COUNT(*) FILTER (WHERE s."quantite" <= 0) AS out
+      FROM "Stock" s
+      JOIN "Produit" p ON p."id" = s."produitId"
+      LEFT JOIN "SeuilStockBoutique" t ON t."boutiqueId" = s."boutiqueId" AND t."produitId" = s."produitId"
+      WHERE p."organisationId" = ${organisationId} AND p."actif" = true ${storeSql("s")}
+        AND s."quantite" <= COALESCE(t."seuilAlerte", p."seuilAlerte")`,
+    prisma.$queryRaw<{ productId: number; productName: string; unit: string; storeId: number; storeName: string; quantity: number; alertThreshold: number }[]>`
+      SELECT p."id" AS "productId", p."nom" AS "productName", p."unite" AS unit, b."id" AS "storeId", b."nom" AS "storeName",
+             s."quantite" AS quantity, COALESCE(t."seuilAlerte", p."seuilAlerte") AS "alertThreshold"
+      FROM "Stock" s
+      JOIN "Produit" p ON p."id" = s."produitId"
+      JOIN "Boutique" b ON b."id" = s."boutiqueId"
+      LEFT JOIN "SeuilStockBoutique" t ON t."boutiqueId" = s."boutiqueId" AND t."produitId" = s."produitId"
+      WHERE p."organisationId" = ${organisationId} AND b."organisationId" = ${organisationId} AND p."actif" = true ${storeSql("s")}
+        AND s."quantite" <= COALESCE(t."seuilAlerte", p."seuilAlerte")
+      ORDER BY s."quantite" ASC, p."nom" ASC
+      LIMIT ${LOW_STOCK_LIST_SIZE}`,
+    // Quantités nettes des retours ; montant au prorata des quantités conservées, avant remise globale.
+    prisma.$queryRaw<{ productId: number; productName: string; unit: string; quantity: bigint; amount: Prisma.Decimal }[]>`
+      SELECT p."id" AS "productId", p."nom" AS "productName", p."unite" AS unit,
+             SUM(l."quantite" - l."quantiteRetournee") AS quantity,
+             SUM(l."sousTotal" * (l."quantite" - l."quantiteRetournee") / l."quantite") AS amount
+      FROM "LigneVente" l
+      JOIN "Vente" v ON v."id" = l."venteId"
+      JOIN "Produit" p ON p."id" = l."produitId"
+      WHERE v."organisationId" = ${organisationId} ${storeSql("v")}
+        AND v."statut" = 'COMPLETED' AND v."creeLe" >= ${startOfMonth} AND v."creeLe" < ${startOfTomorrow}
+      GROUP BY p."id", p."nom", p."unite"
+      HAVING SUM(l."quantite" - l."quantiteRetournee") > 0
+      ORDER BY quantity DESC
+      LIMIT ${TOP_PRODUCTS_SIZE}`,
+    prisma.$queryRaw<{ day: string; total: Prisma.Decimal; count: bigint }[]>`
+      SELECT to_char(timezone(${timeZone}, v."creeLe" AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
+             SUM(v."total") AS total, COUNT(*) AS count
+      FROM "Vente" v
+      WHERE v."organisationId" = ${organisationId} ${storeSql("v")}
+        AND v."statut" = 'COMPLETED' AND v."creeLe" >= ${startOfTrend} AND v."creeLe" < ${startOfTomorrow}
+      GROUP BY 1`,
+    prisma.$queryRaw<{ day: string; total: Prisma.Decimal }[]>`
+      SELECT to_char(timezone(${timeZone}, r."creeLe" AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day, SUM(r."montant") AS total
+      FROM "RetourVente" r JOIN "Vente" v ON v."id" = r."venteId"
+      WHERE r."organisationId" = ${organisationId} ${storeSql("r")}
+        AND v."statut" = 'COMPLETED' AND r."creeLe" >= ${startOfTrend} AND r."creeLe" < ${startOfTomorrow}
+      GROUP BY 1`,
     prisma.vente.findMany({
-      where: { ...completed, creeLe: { gte: startOfTrend } },
-      select: { creeLe: true, total: true },
-    }),
-    prisma.vente.findMany({
-      where: saleScope,
+      where: { organisationId, ...(storeId ? { boutiqueId: storeId } : {}) },
       orderBy: { creeLe: "desc" },
       take: 8,
       select: {
@@ -125,53 +118,32 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
         client: { select: { nom: true } },
       },
     }),
-    prisma.depense.findMany({
-      where: { ...expenseScope, statut: "ACTIVE" },
-      orderBy: { date: "desc" },
-      take: 8,
-      select: { id: true, libelle: true, categorie: true, montant: true, date: true },
-    }),
+    canViewFinance
+      ? prisma.depense.findMany({
+          where: { organisationId, statut: "ACTIVE", ...(storeId ? { OR: [{ boutiqueId: storeId }, { boutiqueId: null }] } : {}) },
+          orderBy: { date: "desc" },
+          take: 8,
+          select: { id: true, libelle: true, categorie: true, montant: true, date: true },
+        })
+      : Promise.resolve([]),
   ]);
 
-  // --- Chiffres du mois -----------------------------------------------------
-  const revenue = toNumber(monthSales._sum.total ?? 0);
-  const previousRevenue = toNumber(previousSales._sum.total ?? 0);
-  const salesCount = monthSales._count;
-  const costOfGoodsSold = monthCostLines.reduce(
-    (total, line) => total + toNumber(line.coutUnitaire) * line.quantite,
-    0,
-  );
-  const grossMargin = revenue - costOfGoodsSold;
-  const expensesTotal = toNumber(monthExpenses._sum.montant ?? 0);
+  const month_ = visibleFinancials(monthSummary, canViewFinance);
+  const today = visibleFinancials(todaySummary, canViewFinance);
 
-  // --- Stock ----------------------------------------------------------------
-  const thresholdByStock = new Map(storeThresholds.map((row) => [`${row.boutiqueId}:${row.produitId}`, row.seuilAlerte]));
-  const stockRowsWithThresholds = stockRows.map((row) => ({ ...row, produit: { ...row.produit, seuilAlerte: thresholdByStock.get(`${row.boutique.id}:${row.produit.id}`) ?? row.produit.seuilAlerte } }));
-  const lowStockRows = stockRowsWithThresholds
-    .filter((row) => row.quantite <= row.produit.seuilAlerte)
-    .sort((a, b) => a.quantite - b.quantite);
-
-  // --- Meilleures ventes ----------------------------------------------------
-  const topProductNames = await prisma.produit.findMany({
-    where: { id: { in: topProductRows.map((row) => row.produitId) }, organisationId },
-    select: { id: true, nom: true, unite: true },
-  });
-  const namesById = new Map(topProductNames.map((product) => [product.id, product]));
-
-  // --- Évolution sur 7 jours ------------------------------------------------
+  // --- Évolution sur 7 jours (CA net par jour, dans le fuseau de l'organisation) ---
+  const salesByDay = new Map(trendSalesRows.map((row) => [row.day, row]));
+  const returnsByDay = new Map(trendReturnRows.map((row) => [row.day, toNumber(row.total)]));
   const trend = Array.from({ length: TREND_DAYS }, (_, index) => {
-    const dayKey = addDateKeyDays(addDateKeyDays(todayKey, -(TREND_DAYS - 1)), index);
-    const date = startOfDateKey(dayKey, timeZone);
-    const nextDate = startOfDateKey(addDateKeyDays(dayKey, 1), timeZone);
-    const daySales = trendSales.filter((sale) => sale.creeLe >= date && sale.creeLe < nextDate);
+    const dayKey = addDateKeyDays(trendStartKey, index);
+    const row = salesByDay.get(dayKey);
     return {
-      day: new Intl.DateTimeFormat("fr-FR", { timeZone, weekday: "short", day: "numeric" }).format(date),
-      value: daySales.reduce((total, sale) => total + toNumber(sale.total), 0),
-      count: daySales.length,
+      day: new Intl.DateTimeFormat("fr-FR", { timeZone, weekday: "short", day: "numeric" }).format(startOfDateKey(dayKey, timeZone)),
+      value: (row ? toNumber(row.total) : 0) - (returnsByDay.get(dayKey) ?? 0),
+      count: row ? Number(row.count) : 0,
     };
   });
 
-  // --- Activité récente -----------------------------------------------------
   const recentActivity = [
     ...recentSales.map((sale) => ({
       type: "sale" as const,
@@ -200,49 +172,42 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
       start: startOfMonth,
       previousStart: startOfPreviousMonth,
       previousEnd: endOfPreviousPeriod,
-      // Mois au format « AAAA-MM », dans le fuseau du serveur : c'est lui que les
-      // clients affichent. Relire `start` dans le fuseau de l'appareil peut
-      // basculer sur le mois voisin (minuit à Paris = la veille au soir en UTC).
+      // Mois au format « AAAA-MM » dans le fuseau de l'organisation.
       month: monthKeyLocal,
       previousMonth: previousMonthKey,
     },
-    revenue,
+    /** Décomposition complète du mois et du jour (même structure que la page Ventes). */
+    month: month_,
+    today,
+    // Raccourcis historiques, lus par le site et le mobile.
+    revenue: month_.revenue,
     previousRevenue,
     /** Variation en % par rapport à la même période du mois précédent ; null si rien à comparer. */
-    revenueChange: previousRevenue > 0 ? ((revenue - previousRevenue) / previousRevenue) * 100 : null,
-    salesCount,
-    averageBasket: salesCount > 0 ? revenue / salesCount : 0,
-    todayRevenue: toNumber(todaySales._sum.total ?? 0),
-    todaySalesCount: todaySales._count,
-    todayCollected: toNumber(todayCollected._sum.montant ?? 0),
-    todayRefunded: toNumber(todayRefunded._sum.montant ?? 0),
-    todayNetCollected: toNumber(todayCollected._sum.montant ?? 0) - toNumber(todayRefunded._sum.montant ?? 0),
-    pendingRefund: pendingRefunds.reduce((sum, refund) => sum + toNumber(refund.montant) - refund.versements.reduce((paid, payout) => paid + toNumber(payout.montant), 0), 0),
-    costOfGoodsSold,
-    grossMargin,
-    /** Taux de marge en % du chiffre d'affaires ; null sans ventes. */
-    grossMarginRate: revenue > 0 ? (grossMargin / revenue) * 100 : null,
-    expensesTotal,
-    netProfit: grossMargin - expensesTotal,
+    revenueChange: previousRevenue > 0 ? ((month_.revenue - previousRevenue) / previousRevenue) * 100 : null,
+    salesCount: month_.salesCount,
+    averageBasket: month_.salesCount > 0 ? month_.grossSales / month_.salesCount : 0,
+    todayRevenue: today.revenue,
+    todaySalesCount: today.salesCount,
+    todayCollected: today.collected,
+    todayRefunded: today.refunded,
+    todayNetCollected: today.netCollected,
+    pendingRefund: month_.pendingRefund,
+    costOfGoodsSold: month_.costOfGoodsSold,
+    grossMargin: month_.grossMargin,
+    grossMarginRate: month_.grossMarginRate,
+    expensesTotal: month_.expensesTotal,
+    netProfit: month_.netProfit,
     activeProductsCount,
-    lowStockCount: lowStockRows.length,
-    outOfStockCount: lowStockRows.filter((row) => row.quantite <= 0).length,
-    lowStock: lowStockRows.slice(0, LOW_STOCK_LIST_SIZE).map((row) => ({
-      productId: row.produit.id,
-      productName: row.produit.nom,
-      unit: row.produit.unite,
-      storeId: row.boutique.id,
-      storeName: row.boutique.nom,
-      quantity: row.quantite,
-      alertThreshold: row.produit.seuilAlerte,
-    })),
+    lowStockCount: Number(lowStockCounts[0]?.low ?? 0),
+    outOfStockCount: Number(lowStockCounts[0]?.out ?? 0),
+    lowStock: lowStockRows,
     topProducts: topProductRows.map((row) => ({
-      productId: row.produitId,
-      productName: namesById.get(row.produitId)?.nom ?? "Produit supprimé",
-      unit: namesById.get(row.produitId)?.unite ?? "",
-      quantity: row._sum.quantite ?? 0,
-      /** Montant des lignes, avant la remise globale de la vente. */
-      amount: toNumber(row._sum.sousTotal ?? 0),
+      productId: row.productId,
+      productName: row.productName,
+      unit: row.unit,
+      quantity: Number(row.quantity),
+      /** Montant des lignes conservées, avant la remise globale de la vente. */
+      amount: toNumber(row.amount),
     })),
     trend,
     recentActivity,

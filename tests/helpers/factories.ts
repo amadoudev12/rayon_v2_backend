@@ -81,3 +81,34 @@ export async function stockOf(boutiqueId: number, produitId: number) {
   });
   return stock?.quantite ?? 0;
 }
+
+// ---------------------------------------------------------------------------
+// Opérations de vente avec clé d'idempotence générée (tests de services)
+// ---------------------------------------------------------------------------
+
+let keySequence = 0;
+/** Clé d'idempotence unique et valide pour un test. */
+export const testKey = (label = "op") => `test-${label}-${process.pid}-${++keySequence}`;
+
+/** Annule une vente (remboursement dû par défaut). */
+export async function cancel(
+  context: AuthContext,
+  saleId: number,
+  input: Partial<import("@/services/sale").CancelInput> = {},
+  key = testKey("cancel"),
+) {
+  const { cancelSale } = await import("@/services/sale");
+  return cancelSale(context, saleId, { motif: "Annulation de test", type: "REFUND", ...input }, key);
+}
+
+/** Enregistre un versement client sur une vente. */
+export async function pay(
+  context: AuthContext,
+  saleId: number,
+  amount: number,
+  mode: "CASH" | "CARD" | "MOBILE_MONEY" | "OTHER" = "CASH",
+  key = testKey("pay"),
+) {
+  const { addSalePayment } = await import("@/services/sale");
+  return addSalePayment(context, saleId, amount, mode, key);
+}

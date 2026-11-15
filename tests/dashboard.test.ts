@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { createSale, cancelSale } from "@/services/sale";
+import { createSale } from "@/services/sale";
 import { getDashboardStats } from "@/services/dashboard";
-import { createProduit, createShop, resetDatabase } from "./helpers/factories";
+import { cancel, createProduit, createShop, resetDatabase } from "./helpers/factories";
 
 beforeEach(resetDatabase);
 
@@ -31,9 +31,9 @@ describe("getDashboardStats — chiffres du tableau de bord", () => {
     await sell(shop, produit.id, 3, 500); // CA 2 500, coût 1 800
     await sell(shop, produit.id, 2); // CA 2 000, coût 1 200
     const annulee = await sell(shop, produit.id, 10); // annulée : ne compte nulle part
-    await cancelSale(shop.context, annulee.id);
+    await cancel(shop.context, annulee.id);
 
-    const stats = await getDashboardStats(shop.context, shop.boutique.id);
+    const stats = await getDashboardStats(shop.context, shop.boutique.id, true);
 
     expect(stats.revenue).toBe(4500);
     expect(stats.salesCount).toBe(2);
@@ -46,7 +46,7 @@ describe("getDashboardStats — chiffres du tableau de bord", () => {
     expect(stats.netProfit).toBe(1500); // aucune dépense
   });
 
-  it("compte les dépenses de la boutique et les charges générales, pas celles des autres boutiques", async () => {
+  it("vue boutique : ses dépenses seulement, charges générales à part ; vue organisation : tout", async () => {
     const shop = await createShop();
     const annexe = await prisma.boutique.create({ data: { organisationId: shop.organisation.id, nom: "Annexe" } });
     const other = await createShop("Autre organisation");
@@ -58,10 +58,15 @@ describe("getDashboardStats — chiffres du tableau de bord", () => {
     await depense(shop.organisation.id, annexe.id, 50_000, shop.context.userId); // autre boutique
     await depense(other.organisation.id, null, 99_000, other.context.userId); // autre organisation
 
-    const stats = await getDashboardStats(shop.context, shop.boutique.id);
+    const stats = await getDashboardStats(shop.context, shop.boutique.id, true);
 
-    expect(stats.expensesTotal).toBe(10_000);
-    expect(stats.netProfit).toBe(-10_000);
+    expect(stats.expensesTotal).toBe(3_000);
+    expect(stats.month.generalExpenses).toBe(7_000);
+    expect(stats.netProfit).toBe(-3_000);
+
+    const all = await getDashboardStats(shop.context, null, true);
+    expect(all.expensesTotal).toBe(60_000); // 3 000 + 7 000 + 50 000, jamais l'autre organisation
+    expect(all.netProfit).toBe(-60_000);
   });
 
   it("compte toutes les alertes de stock, même au-delà des 8 affichées", async () => {
@@ -73,7 +78,7 @@ describe("getDashboardStats — chiffres du tableau de bord", () => {
     await createProduit(shop.organisation.id, shop.boutique.id, { stock: 40, seuilAlerte: 5 }); // stock suffisant
     await createProduit(shop.organisation.id, shop.boutique.id, { stock: 0, actif: false }); // archivé : ignoré
 
-    const stats = await getDashboardStats(shop.context, shop.boutique.id);
+    const stats = await getDashboardStats(shop.context, shop.boutique.id, true);
 
     expect(stats.lowStockCount).toBe(11);
     expect(stats.outOfStockCount).toBe(6);
@@ -90,7 +95,7 @@ describe("getDashboardStats — chiffres du tableau de bord", () => {
     const ancienne = await sell(shop, produit.id, 2); // 2 000, déplacée au mois précédent
     await prisma.vente.update({ where: { id: ancienne.id }, data: { creeLe: periods().insidePreviousPeriod } });
 
-    const stats = await getDashboardStats(shop.context, shop.boutique.id);
+    const stats = await getDashboardStats(shop.context, shop.boutique.id, true);
 
     expect(stats.revenue).toBe(3000);
     expect(stats.previousRevenue).toBe(2000);
@@ -105,7 +110,7 @@ describe("getDashboardStats — chiffres du tableau de bord", () => {
     await sell(shop, eau.id, 9);
     await sell(shop, riz.id, 1);
 
-    const stats = await getDashboardStats(shop.context, shop.boutique.id);
+    const stats = await getDashboardStats(shop.context, shop.boutique.id, true);
 
     expect(stats.topProducts.map((p) => [p.productName, p.quantity])).toEqual([
       ["Eau", 9],
@@ -123,7 +128,7 @@ describe("getDashboardStats — chiffres du tableau de bord", () => {
     });
     await sell(other, produitAutre.id, 5);
 
-    const stats = await getDashboardStats(shop.context, shop.boutique.id);
+    const stats = await getDashboardStats(shop.context, shop.boutique.id, true);
 
     expect(stats.revenue).toBe(0);
     expect(stats.salesCount).toBe(0);
