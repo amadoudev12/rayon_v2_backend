@@ -16,6 +16,7 @@ export const saleSchema = z.object({
   remise: z.coerce.number().nonnegative("La remise doit être positive ou nulle.").default(0),
   /** Vente à crédit : premier versement (0 par défaut). Autres modes : la vente est payée en totalité. */
   montantPaye: z.coerce.number().nonnegative("Le montant payé doit être positif ou nul.").optional(),
+  modePaiementAcompte: z.enum(PaymentMethod).exclude(["CREDIT"]).optional(),
   note: z.string().trim().optional().or(z.literal("")),
   /** Devis transformé en cette vente. */
   devisId: z.coerce.number().int().positive().optional().nullable(),
@@ -26,6 +27,11 @@ export type SaleFormData = z.infer<typeof saleSchema>;
 /** Versement d'un client sur une vente (remboursement d'une créance). */
 export const salePaymentSchema = z.object({
   montant: z.coerce.number().positive("Le montant doit être supérieur à 0."),
+  modePaiement: z.enum(PaymentMethod).exclude(["CREDIT"]),
 });
+
+export const cancellationSchema = z.object({ motif: z.string().trim().min(3).max(500) });
+export const refundSchema = z.object({ montant: z.coerce.number().positive(), motif: z.string().trim().min(3).max(500) });
+export const refundPayoutSchema = z.object({ montant: z.coerce.number().positive(), modePaiement: z.enum(PaymentMethod).exclude(["CREDIT"]) });
 
 export type SalePaymentFormData = z.infer<typeof salePaymentSchema>;

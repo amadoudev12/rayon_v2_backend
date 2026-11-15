@@ -373,6 +373,13 @@ describe("parsePeriod — périodes de statistiques", () => {
     expect(() => parsePeriod(new URLSearchParams({ periode: "custom", du: "2026-02-30" }), now)).toThrow();
     expect(() => parsePeriod(new URLSearchParams({ periode: "custom", du: "2026-10-10", au: "2026-10-01" }), now)).toThrow();
   });
+
+  it("calcule les bornes dans le fuseau IANA de l'organisation", () => {
+    const period = parsePeriod(new URLSearchParams(), new Date("2026-01-01T23:30:00.000Z"), "Europe/Paris");
+    expect(period.from).toBe("2026-01-02");
+    expect(period.start.toISOString()).toBe("2026-01-01T23:00:00.000Z");
+    expect(period.end.toISOString()).toBe("2026-01-02T23:00:00.000Z");
+  });
 });
 
 describe("TEST 10 — devis", () => {
@@ -436,14 +443,14 @@ describe("API — paiements et statistiques", () => {
     const sale = await sell(shop, produit.id, 1, { credit: { clientId: client.id, montantPaye: 30_000 } });
     signIn(shop.context.userId, shop.organisation.id, Role.OWNER);
 
-    const ok = await request(app).post(`/api/sales/${sale.id}/payments`).send({ montant: 20_000 });
+    const ok = await request(app).post(`/api/sales/${sale.id}/payments`).set("Idempotency-Key", "payment-test-0001").send({ montant: 20_000, modePaiement: "CASH" });
     expect(ok.status).toBe(201);
     expect(Number(ok.body.data.montantPaye)).toBe(50_000);
     expect(Number(ok.body.data.resteAPayer)).toBe(50_000);
 
-    const tooMuch = await request(app).post(`/api/sales/${sale.id}/payments`).send({ montant: 50_001 });
+    const tooMuch = await request(app).post(`/api/sales/${sale.id}/payments`).set("Idempotency-Key", "payment-test-0002").send({ montant: 50_001, modePaiement: "CASH" });
     expect(tooMuch.status).toBe(409);
-    const negative = await request(app).post(`/api/sales/${sale.id}/payments`).send({ montant: -10 });
+    const negative = await request(app).post(`/api/sales/${sale.id}/payments`).set("Idempotency-Key", "payment-test-0003").send({ montant: -10, modePaiement: "CASH" });
     expect(negative.status).toBe(400);
 
     const details = await request(app).get(`/api/sales/${sale.id}`);

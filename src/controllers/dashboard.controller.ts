@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import * as dashboardService from "@/services/dashboard";
 import { resolveActiveStoreId } from "@/lib/auth/session";
 import { jsonData, searchParams } from "@/lib/api/response";
+import { can } from "@/lib/auth/permissions";
 
 export async function getDashboard(req: Request, res: Response) {
   const context = req.user;
@@ -17,5 +18,7 @@ export async function getDashboard(req: Request, res: Response) {
       : null;
 
   const stats = await dashboardService.getDashboardStats(context, storeId);
-  return jsonData(res, stats);
+  if (can(context.role, "report:view")) return jsonData(res, stats);
+  return jsonData(res, { ...stats, costOfGoodsSold: null, grossMargin: null, grossMarginRate: null, expensesTotal: null, netProfit: null,
+    recentActivity: stats.recentActivity.filter((activity) => activity.type !== "expense") });
 }

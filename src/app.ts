@@ -1,7 +1,7 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
-import { allowedOrigins } from "@/env";
+import { allowedOrigins, trustProxyHops } from "@/env";
 import { requestContext } from "@/lib/http/context";
 import { errorHandler } from "@/middleware/errorHandler";
 import { securityHeaders, verifyOrigin } from "@/middleware/security";
@@ -19,6 +19,8 @@ import purchaseRoutes from "@/routes/purchase.routes";
 import quoteRoutes from "@/routes/quote.routes";
 import saleRoutes from "@/routes/sale.routes";
 import stockRoutes from "@/routes/stock.routes";
+import inventoryRoutes from "@/routes/inventory.routes";
+import lossRoutes from "@/routes/loss.routes";
 import storeRoutes from "@/routes/store.routes";
 import supplierRoutes from "@/routes/supplier.routes";
 
@@ -26,6 +28,7 @@ export function createApp() {
   const app = express();
   app.disable("x-powered-by");
   app.set("etag", false);
+  app.set("trust proxy", trustProxyHops());
 
   // Middlewares appliqués à toutes les requêtes
   app.use(securityHeaders);
@@ -50,6 +53,8 @@ export function createApp() {
   app.use("/api/categories", categoryRoutes);
   app.use("/api/products", productRoutes);
   app.use("/api/stock", stockRoutes);
+  app.use("/api/inventories", inventoryRoutes);
+  app.use("/api/losses", lossRoutes);
   app.use("/api/dashboard", dashboardRoutes);
   app.use("/api/sales", saleRoutes);
   app.use("/api/purchases", purchaseRoutes);

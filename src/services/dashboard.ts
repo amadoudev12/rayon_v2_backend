@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { SaleStatus } from "@/generated/prisma/enums";
 import { toNumber } from "@/lib/money";
+import { addDateKeyDays, dateKeyAt, startOfDateKey, zonedMonthKey } from "@/lib/timezone";
 import type { AuthContext } from "@/lib/auth/session";
 
 const TREND_DAYS = 7;
@@ -8,10 +9,6 @@ const LOW_STOCK_LIST_SIZE = 8;
 const TOP_PRODUCTS_SIZE = 5;
 
 export type DashboardStats = Awaited<ReturnType<typeof getDashboardStats>>;
-
-function monthKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
 
 /**
  * Agrège les chiffres dont un commerçant a réellement besoin, limités à son
@@ -31,15 +28,20 @@ function monthKey(date: Date) {
 export async function getDashboardStats(context: AuthContext, storeId: number | null) {
   const organisationId = context.organizationId;
   const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfTrend = new Date(startOfToday);
-  startOfTrend.setDate(startOfTrend.getDate() - (TREND_DAYS - 1));
+  const organization = await prisma.organisation.findUniqueOrThrow({ where: { id: organisationId }, select: { fuseauHoraire: true } });
+  const timeZone = organization.fuseauHoraire;
+  const todayKey = dateKeyAt(now, timeZone);
+  const monthKeyLocal = zonedMonthKey(now, timeZone);
+  const startOfToday = startOfDateKey(todayKey, timeZone);
+  const startOfMonth = startOfDateKey(`${monthKeyLocal}-01`, timeZone);
+  const startOfTrend = startOfDateKey(addDateKeyDays(todayKey, -(TREND_DAYS - 1)), timeZone);
 
   // Même durée écoulée, mais sur le mois précédent (ex : du 1er au 30 à 14h),
   // pour comparer des périodes équivalentes et non un mois entier à un mois
   // en cours.
-  const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const [year, month] = monthKeyLocal.split("-").map(Number);
+  const previousMonthKey = month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`;
+  const startOfPreviousMonth = startOfDateKey(`${previousMonthKey}-01`, timeZone);
   const endOfPreviousPeriod = new Date(
     Math.min(startOfPreviousMonth.getTime() + (now.getTime() - startOfMonth.getTime()), startOfMonth.getTime()),
   );
@@ -56,10 +58,14 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
     monthSales,
     previousSales,
     todaySales,
+    todayCollected,
+    todayRefunded,
+    pendingRefunds,
     monthCostLines,
     monthExpenses,
     activeProductsCount,
     stockRows,
+    storeThresholds,
     topProductRows,
     trendSales,
     recentSales,
@@ -71,12 +77,15 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
       _sum: { total: true },
     }),
     prisma.vente.aggregate({ where: { ...completed, creeLe: { gte: startOfToday } }, _sum: { total: true }, _count: true }),
+    prisma.paiementVente.aggregate({ where: { date: { gte: startOfToday }, vente: saleScope }, _sum: { montant: true } }),
+    prisma.versementRemboursement.aggregate({ where: { date: { gte: startOfToday }, remboursementVente: { vente: saleScope } }, _sum: { montant: true } }),
+    prisma.remboursementVente.findMany({ where: { vente: saleScope, statut: { not: "COMPLETED" } }, include: { versements: { select: { montant: true } } } }),
     prisma.ligneVente.findMany({
       where: { vente: monthSaleWhere },
       select: { quantite: true, coutUnitaire: true },
     }),
     prisma.depense.aggregate({
-      where: { ...expenseScope, date: { gte: startOfMonth } },
+      where: { ...expenseScope, date: { gte: startOfMonth }, statut: "ACTIVE" },
       _sum: { montant: true },
     }),
     prisma.produit.count({ where: { organisationId, actif: true } }),
@@ -91,6 +100,7 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
         boutique: { select: { id: true, nom: true } },
       },
     }),
+    prisma.seuilStockBoutique.findMany({ where: { organisationId, ...(storeId ? { boutiqueId: storeId } : {}) }, select: { boutiqueId: true, produitId: true, seuilAlerte: true } }),
     prisma.ligneVente.groupBy({
       by: ["produitId"],
       where: { vente: monthSaleWhere },
@@ -116,7 +126,7 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
       },
     }),
     prisma.depense.findMany({
-      where: expenseScope,
+      where: { ...expenseScope, statut: "ACTIVE" },
       orderBy: { date: "desc" },
       take: 8,
       select: { id: true, libelle: true, categorie: true, montant: true, date: true },
@@ -135,7 +145,9 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
   const expensesTotal = toNumber(monthExpenses._sum.montant ?? 0);
 
   // --- Stock ----------------------------------------------------------------
-  const lowStockRows = stockRows
+  const thresholdByStock = new Map(storeThresholds.map((row) => [`${row.boutiqueId}:${row.produitId}`, row.seuilAlerte]));
+  const stockRowsWithThresholds = stockRows.map((row) => ({ ...row, produit: { ...row.produit, seuilAlerte: thresholdByStock.get(`${row.boutique.id}:${row.produit.id}`) ?? row.produit.seuilAlerte } }));
+  const lowStockRows = stockRowsWithThresholds
     .filter((row) => row.quantite <= row.produit.seuilAlerte)
     .sort((a, b) => a.quantite - b.quantite);
 
@@ -148,13 +160,12 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
 
   // --- Évolution sur 7 jours ------------------------------------------------
   const trend = Array.from({ length: TREND_DAYS }, (_, index) => {
-    const date = new Date(startOfTrend);
-    date.setDate(startOfTrend.getDate() + index);
-    const nextDate = new Date(date);
-    nextDate.setDate(date.getDate() + 1);
+    const dayKey = addDateKeyDays(addDateKeyDays(todayKey, -(TREND_DAYS - 1)), index);
+    const date = startOfDateKey(dayKey, timeZone);
+    const nextDate = startOfDateKey(addDateKeyDays(dayKey, 1), timeZone);
     const daySales = trendSales.filter((sale) => sale.creeLe >= date && sale.creeLe < nextDate);
     return {
-      day: date.toLocaleDateString("fr-FR", { weekday: "short", day: "numeric" }),
+      day: new Intl.DateTimeFormat("fr-FR", { timeZone, weekday: "short", day: "numeric" }).format(date),
       value: daySales.reduce((total, sale) => total + toNumber(sale.total), 0),
       count: daySales.length,
     };
@@ -192,8 +203,8 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
       // Mois au format « AAAA-MM », dans le fuseau du serveur : c'est lui que les
       // clients affichent. Relire `start` dans le fuseau de l'appareil peut
       // basculer sur le mois voisin (minuit à Paris = la veille au soir en UTC).
-      month: monthKey(startOfMonth),
-      previousMonth: monthKey(startOfPreviousMonth),
+      month: monthKeyLocal,
+      previousMonth: previousMonthKey,
     },
     revenue,
     previousRevenue,
@@ -203,6 +214,10 @@ export async function getDashboardStats(context: AuthContext, storeId: number | 
     averageBasket: salesCount > 0 ? revenue / salesCount : 0,
     todayRevenue: toNumber(todaySales._sum.total ?? 0),
     todaySalesCount: todaySales._count,
+    todayCollected: toNumber(todayCollected._sum.montant ?? 0),
+    todayRefunded: toNumber(todayRefunded._sum.montant ?? 0),
+    todayNetCollected: toNumber(todayCollected._sum.montant ?? 0) - toNumber(todayRefunded._sum.montant ?? 0),
+    pendingRefund: pendingRefunds.reduce((sum, refund) => sum + toNumber(refund.montant) - refund.versements.reduce((paid, payout) => paid + toNumber(payout.montant), 0), 0),
     costOfGoodsSold,
     grossMargin,
     /** Taux de marge en % du chiffre d'affaires ; null sans ventes. */

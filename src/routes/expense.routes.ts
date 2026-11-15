@@ -5,7 +5,7 @@ import { getAllExpenses, createExpense, deleteExpense } from "@/controllers/expe
 
 const router = Router();
 
-router.get("/", verifyToken, getAllExpenses);
+router.get("/", verifyToken, requirePermission("expense:manage"), getAllExpenses);
 router.post("/", verifyToken, requirePermission("expense:manage"), createExpense);
 router.delete("/:id", verifyToken, requirePermission("expense:manage"), deleteExpense);
 

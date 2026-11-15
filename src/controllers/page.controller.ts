@@ -2,7 +2,8 @@ import type { Request, Response } from "express";
 import * as dashboardService from "@/services/dashboard";
 import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
 import { remainingOf } from "@/services/sale";
-import { PaymentMethod, SaleStatus } from "@/generated/prisma/enums";
+import { PaymentMethod, SaleStatus, StockMovementType } from "@/generated/prisma/enums";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { parsePeriod } from "@/lib/period";
 import { containsText } from "@/lib/search";
@@ -83,7 +84,9 @@ export async function getDashboardPage(req: Request, res: Response) {
     prisma.vente.count({ where: { organisationId: context.organizationId } }),
   ]);
 
-  return jsonData(res, { currency: organization.devise, storeName: store.nom, stats, totalProducts, totalSales });
+  const visibleStats = can(context.role, "report:view") ? stats : { ...stats, costOfGoodsSold: null, grossMargin: null, grossMarginRate: null, expensesTotal: null, netProfit: null,
+    recentActivity: stats.recentActivity.filter((activity) => activity.type !== "expense") };
+  return jsonData(res, { currency: organization.devise, storeName: store.nom, stats: visibleStats, totalProducts, totalSales });
 }
 
 export async function getProductsPage(req: Request, res: Response) {
@@ -122,7 +125,7 @@ export async function getProductsPage(req: Request, res: Response) {
   // Les montants sont envoyés en nombres, comme les recevaient les composants.
   const data = products.map(({ stocks, prixAchat, prixVente, ...product }) => ({
     ...product,
-    prixAchat: Number(prixAchat),
+    prixAchat: can(context.role, "report:view") ? Number(prixAchat) : null,
     prixVente: Number(prixVente),
     quantiteStock: stocks[0]?.quantite ?? 0,
   }));
@@ -157,7 +160,7 @@ export async function getStockPage(req: Request, res: Response) {
     },
   };
 
-  const [stocksRaw, total, organization] = await Promise.all([
+  const [stocksRaw, total, organization, thresholds] = await Promise.all([
     prisma.stock.findMany({
       where,
       include: { produit: { select: { id: true, nom: true, unite: true, seuilAlerte: true, prixVente: true } } },
@@ -165,9 +168,11 @@ export async function getStockPage(req: Request, res: Response) {
     }),
     prisma.stock.count({ where }),
     prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
+    prisma.seuilStockBoutique.findMany({ where: { organisationId: context.organizationId, boutiqueId: storeId } }),
   ]);
-
-  const filtered = lowStockOnly ? stocksRaw.filter((s) => s.quantite <= s.produit.seuilAlerte) : stocksRaw;
+  const thresholdByProduct = new Map(thresholds.map((row) => [row.produitId, row.seuilAlerte]));
+  const withThresholds = stocksRaw.map((stock) => ({ ...stock, produit: { ...stock.produit, seuilAlerte: thresholdByProduct.get(stock.produitId) ?? stock.produit.seuilAlerte } }));
+  const filtered = lowStockOnly ? withThresholds.filter((s) => s.quantite <= s.produit.seuilAlerte) : withThresholds;
   const pageItems = filtered
     .slice((pagination.page - 1) * pagination.limit, pagination.page * pagination.limit)
     .map((stock) => ({ ...stock, produit: { ...stock.produit, prixVente: Number(stock.produit.prixVente) } }));
@@ -176,6 +181,7 @@ export async function getStockPage(req: Request, res: Response) {
   return jsonData(res, {
     stocks: pageItems,
     canAdjust,
+    canViewMovements: can(context.role, "stock-movement:read"),
     currency: organization.devise,
     page: pagination.page,
     totalPages: paginationMeta(pagination, effectiveTotal).totalPages,
@@ -185,16 +191,25 @@ export async function getStockPage(req: Request, res: Response) {
 
 export async function getStockMovementsPage(req: Request, res: Response) {
   const context = req.user;
+  const params = searchParams(req);
   const storeId = await getActiveStoreId(context);
-  const pagination = getPagination(searchParams(req), 30);
-
-  const where = { boutiqueId: storeId };
+  const pagination = getPagination(params, 30);
+  const search = params.get("search")?.trim() ?? "";
+  const typeValue = params.get("type");
+  const type = typeValue ? z.enum(StockMovementType).parse(typeValue) : undefined;
+  const from = params.get("from") ? new Date(params.get("from")!) : undefined;
+  const to = params.get("to") ? new Date(params.get("to")!) : undefined;
+  const userId = Number(params.get("userId")) || undefined;
+  const sourceReference = params.get("source")?.trim() ?? "";
+  const where = { boutiqueId: storeId, produit: { organisationId: context.organizationId, ...(search ? { nom: containsText(search) } : {}) }, ...(userId ? { utilisateurId: userId } : {}), ...(sourceReference ? { sourceReference: { contains: sourceReference, mode: "insensitive" as const } } : {}), ...(type ? { type } : {}), ...(from || to ? { creeLe: { ...(from && !Number.isNaN(from.getTime()) ? { gte: from } : {}), ...(to && !Number.isNaN(to.getTime()) ? { lte: to } : {}) } } : {}) };
   const [movements, total] = await Promise.all([
     prisma.mouvementStock.findMany({
       where,
       include: {
         produit: { select: { id: true, nom: true, unite: true } },
         utilisateur: { select: { prenom: true, nom: true } },
+        vente: { select: { id: true } },
+        achat: { select: { id: true } },
       },
       orderBy: { creeLe: "desc" },
       skip: (pagination.page - 1) * pagination.limit,
@@ -221,7 +236,8 @@ export async function getSalesPage(req: Request, res: Response) {
   const search = params.get("search")?.trim() ?? "";
   const pagination = getPagination(params, 10);
   // La liste et les statistiques portent sur la même période (aujourd'hui par défaut).
-  const period = parsePeriod(params);
+  const organizationTz = await prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { fuseauHoraire: true } });
+  const period = parsePeriod(params, new Date(), organizationTz.fuseauHoraire);
 
   const where = {
     organisationId: context.organizationId,
@@ -569,8 +585,10 @@ export async function getSuppliersPage(req: Request, res: Response) {
 export async function getExpensesPage(req: Request, res: Response) {
   const context = req.user;
   const pagination = getPagination(searchParams(req), 20);
+  const storeId = await getActiveStoreId(context);
 
-  const where = { organisationId: context.organizationId };
+  const where = { organisationId: context.organizationId, statut: "ACTIVE" as const,
+    ...(context.membershipStoreId ? { boutiqueId: storeId } : {}) };
 
   const [expenses, total, organization] = await Promise.all([
     prisma.depense.findMany({

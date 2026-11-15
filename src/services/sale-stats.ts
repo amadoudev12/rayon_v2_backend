@@ -12,7 +12,7 @@ export type SalesStats = Awaited<ReturnType<typeof getSalesStats>>;
  */
 export function visibleSalesStats(stats: SalesStats, canViewFinance: boolean) {
   if (canViewFinance) return stats;
-  return { ...stats, costOfGoodsSold: null, grossMargin: null, expensesTotal: null, netProfit: null };
+  return { ...stats, costOfGoodsSold: null, grossMargin: null, grossMarginRate: null, expensesTotal: null, netProfit: null };
 }
 
 /**
@@ -38,7 +38,7 @@ export async function getSalesStats(context: AuthContext, storeId: number, perio
   const completed = { organisationId, boutiqueId: storeId, statut: SaleStatus.COMPLETED };
   const periodSales = { ...completed, creeLe: range };
 
-  const [sales, creditSales, costLines, payments, paymentsOnOlderSales, outstanding, expenses] = await Promise.all([
+  const [sales, creditSales, costLines, payments, paymentsOnOlderSales, outstanding, expenses, refundPayouts, pendingRefunds] = await Promise.all([
     prisma.vente.aggregate({ where: periodSales, _sum: { total: true }, _count: true }),
     prisma.vente.aggregate({
       where: { ...periodSales, modePaiement: PaymentMethod.CREDIT },
@@ -46,9 +46,9 @@ export async function getSalesStats(context: AuthContext, storeId: number, perio
       _count: true,
     }),
     prisma.ligneVente.findMany({ where: { vente: periodSales }, select: { quantite: true, coutUnitaire: true } }),
-    prisma.paiementVente.aggregate({ where: { date: range, vente: completed }, _sum: { montant: true } }),
+    prisma.paiementVente.aggregate({ where: { date: range, vente: { organisationId, boutiqueId: storeId, statut: SaleStatus.COMPLETED } }, _sum: { montant: true } }),
     prisma.paiementVente.aggregate({
-      where: { date: range, vente: { ...completed, creeLe: { lt: period.start } } },
+      where: { date: range, vente: { organisationId, boutiqueId: storeId, statut: SaleStatus.COMPLETED, creeLe: { lt: period.start } } },
       _sum: { montant: true },
     }),
     prisma.vente.aggregate({
@@ -57,20 +57,27 @@ export async function getSalesStats(context: AuthContext, storeId: number, perio
       _count: true,
     }),
     prisma.depense.aggregate({
-      where: { organisationId, OR: [{ boutiqueId: storeId }, { boutiqueId: null }], date: range },
+      where: { organisationId, OR: [{ boutiqueId: storeId }, { boutiqueId: null }], date: range, statut: "ACTIVE" },
       _sum: { montant: true },
     }),
+    prisma.versementRemboursement.aggregate({ where: { date: range, remboursementVente: { vente: { organisationId, boutiqueId: storeId } } }, _sum: { montant: true } }),
+    prisma.remboursementVente.findMany({ where: { vente: { organisationId, boutiqueId: storeId }, statut: { not: "COMPLETED" } }, include: { versements: { select: { montant: true } } } }),
   ]);
 
   const revenue = toNumber(sales._sum.total ?? 0);
   const costOfGoodsSold = costLines.reduce((total, line) => total + toNumber(line.coutUnitaire) * line.quantite, 0);
   const grossMargin = revenue - costOfGoodsSold;
   const expensesTotal = toNumber(expenses._sum.montant ?? 0);
+  const refunded = toNumber(refundPayouts._sum.montant ?? 0);
+  const pendingRefund = pendingRefunds.reduce((sum, refund) => sum + toNumber(refund.montant) - refund.versements.reduce((paid, payout) => paid + toNumber(payout.montant), 0), 0);
 
   return {
     salesCount: sales._count,
     revenue,
     collected: toNumber(payments._sum.montant ?? 0),
+    refunded,
+    netCollected: toNumber(payments._sum.montant ?? 0) - refunded,
+    pendingRefund,
     /** Part de l'encaissé qui rembourse des ventes antérieures à la période. */
     collectedOnOlderSales: toNumber(paymentsOnOlderSales._sum.montant ?? 0),
     creditSales: toNumber(creditSales._sum.total ?? 0),

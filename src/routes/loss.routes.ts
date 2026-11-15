@@ -1,0 +1,11 @@
+import { Router } from "express";
+import { verifyToken } from "@/middleware/verifyToken";
+import { requirePermission } from "@/middleware/requirePermission";
+import * as controller from "@/controllers/loss.controller";
+const router = Router();
+router.use(verifyToken);
+router.get("/", requirePermission("loss:read"), controller.list);
+router.get("/report", requirePermission("loss:read"), controller.report);
+router.post("/", requirePermission("loss:create"), controller.create);
+router.post("/:id/cancel", requirePermission("loss:cancel"), controller.cancel);
+export default router;

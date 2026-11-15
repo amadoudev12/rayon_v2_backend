@@ -63,6 +63,10 @@ export async function createProduct(context: AuthContext, storeId: number, data:
           utilisateurId: userId,
           type: StockMovementType.INITIAL,
           variationQuantite: initialQuantity,
+          quantiteAvant: 0,
+          quantiteApres: initialQuantity,
+          coutUnitaire: data.prixAchat,
+          creeLe: new Date(),
           note: "Stock initial à la création du produit",
         },
       });
@@ -224,13 +228,14 @@ export async function importProducts(
         prixVente: row.prixVente,
         seuilAlerte: row.seuilAlerte,
       })),
-      select: { id: true, nom: true, reference: true },
+      select: { id: true, nom: true, reference: true, prixAchat: true },
     });
 
     const quantities = new Map(accepted.map((row) => [rowKey(row), row.quantiteInitiale ?? 0]));
     const initialStocks = products.map((product) => ({
       produitId: product.id,
       quantite: quantities.get(rowKey(product)) ?? 0,
+      prixAchat: product.prixAchat,
     }));
 
     await tx.stock.createMany({
@@ -246,12 +251,16 @@ export async function importProducts(
     const movements = initialStocks.filter(({ quantite }) => quantite > 0);
     if (movements.length > 0) {
       await tx.mouvementStock.createMany({
-        data: movements.map(({ produitId, quantite }) => ({
+        data: movements.map(({ produitId, quantite, prixAchat }) => ({
           boutiqueId: storeId,
           produitId,
           utilisateurId: userId,
           type: StockMovementType.INITIAL,
           variationQuantite: quantite,
+          quantiteAvant: 0,
+          quantiteApres: quantite,
+          coutUnitaire: prixAchat,
+          creeLe: new Date(),
           note: "Stock initial à l'import du produit",
         })),
       });

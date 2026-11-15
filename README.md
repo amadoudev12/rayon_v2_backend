@@ -91,6 +91,12 @@ Sans `TEST_DATABASE_URL`, la base utilisée est celle de `DATABASE_URL` suffixé
 | `COOKIE_SECURE`, `COOKIE_SAMESITE` | Optionnel : réglages du cookie de session (voir `.env.example`) |
 | `TEST_DATABASE_URL` | Base de test |
 
+## Phase 1 commerciale
+
+Les migrations Prisma sont additives et conservent l'historique commercial existant. Une demande de remboursement ne signifie pas que l'argent a ete rendu : l'annulation ouvre une demande en attente pour les sommes encaissees, puis chaque versement reel est confirme separement avec son mode, sa date et son auteur. Les creations de ventes et les versements exigent une cle `Idempotency-Key`.
+
+Configurer le fuseau horaire IANA de l'organisation dans Parametres avant d'utiliser les rapports. Les organisations existantes recoivent `Africa/Dakar` par defaut. Deployer le schema avec `npx prisma migrate deploy` depuis `backend` avant le nouveau serveur. Configurer `TRUST_PROXY_HOPS` au nombre exact de reverse proxies en production; sa valeur par defaut est `0`.
+
 ## 2. Frontend
 
 ```powershell

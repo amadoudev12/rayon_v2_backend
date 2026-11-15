@@ -56,7 +56,8 @@ export async function createQuote(context: AuthContext, storeId: number, data: Q
   });
   const sousTotal = sumDecimals(lines.map((line) => line.sousTotal));
   const remise = new Prisma.Decimal(data.remise ?? 0);
-  const totalBeforeFloor = sousTotal.minus(remise);
+  if (remise.greaterThan(sousTotal)) throw Errors.conflict("La remise ne peut pas dépasser le sous-total.");
+  const total = sousTotal.minus(remise).toDecimalPlaces(2);
 
   return prisma.devis.create({
     data: {
@@ -67,7 +68,7 @@ export async function createQuote(context: AuthContext, storeId: number, data: Q
       nomClient: data.clientId ? null : data.nomClient || null,
       sousTotal,
       remise,
-      total: totalBeforeFloor.isNegative() ? new Prisma.Decimal(0) : totalBeforeFloor,
+      total,
       valableJusquAu: data.valableJusquAu ?? null,
       note: data.note || null,
       lignes: { create: lines },

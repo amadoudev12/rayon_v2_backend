@@ -79,12 +79,11 @@ export async function createPurchase(
       include: purchaseInclude,
     });
 
-    for (const line of lines) {
-      await tx.stock.upsert({
-        where: { boutiqueId_produitId: { boutiqueId: storeId, produitId: line.produitId } },
-        create: { boutiqueId: storeId, produitId: line.produitId, quantite: line.quantite },
-        update: { quantite: { increment: line.quantite } },
-      });
+    const quantitiesAfter = new Map<number, number>();
+    for (const line of [...lines].sort((a, b) => a.produitId - b.produitId)) {
+      await tx.$executeRaw`INSERT INTO "Stock" ("boutiqueId", "produitId", "quantite", "modifieLe") VALUES (${storeId}, ${line.produitId}, 0, NOW()) ON CONFLICT ("boutiqueId", "produitId") DO NOTHING`;
+      const updated = await tx.$queryRaw<Array<{ quantite: number }>>`UPDATE "Stock" SET "quantite" = "quantite" + ${line.quantite}, "modifieLe" = NOW() WHERE "boutiqueId" = ${storeId} AND "produitId" = ${line.produitId} RETURNING "quantite"`;
+      quantitiesAfter.set(line.produitId, updated[0]!.quantite);
       await tx.produit.update({ where: { id: line.produitId }, data: { prixAchat: line.coutUnitaire } });
     }
 
@@ -95,6 +94,11 @@ export async function createPurchase(
         utilisateurId: userId,
         type: StockMovementType.PURCHASE,
         variationQuantite: line.quantite,
+        quantiteAvant: quantitiesAfter.get(line.produitId)! - line.quantite,
+        quantiteApres: quantitiesAfter.get(line.produitId)!,
+        coutUnitaire: line.coutUnitaire,
+        creeLe: new Date(),
+        sourceReference: `Achat #${purchase.id}`,
         achatId: purchase.id,
       })),
     });

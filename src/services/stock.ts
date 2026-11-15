@@ -30,21 +30,16 @@ export async function adjustStock(
   if (!store) throw Errors.forbidden("Boutique invalide");
 
   return prisma.$transaction(async (tx) => {
-    const existingStock = await tx.stock.findUnique({
-      where: { boutiqueId_produitId: { boutiqueId: storeId, produitId: productId } },
-    });
-    const currentQuantity = existingStock?.quantite ?? 0;
-    const nextQuantity = currentQuantity + data.variationQuantite;
-
-    if (nextQuantity < 0) {
-      throw Errors.conflict("Cet ajustement ferait passer le stock sous zéro.");
-    }
-
-    const stock = await tx.stock.upsert({
-      where: { boutiqueId_produitId: { boutiqueId: storeId, produitId: productId } },
-      create: { boutiqueId: storeId, produitId: productId, quantite: nextQuantity },
-      update: { quantite: nextQuantity },
-    });
+    // Atomic delta prevents concurrent adjustments from overwriting one another.
+    // The predicate also rejects a negative result when two removals race.
+    await tx.$executeRaw`INSERT INTO "Stock" ("boutiqueId", "produitId", "quantite", "modifieLe")
+      VALUES (${storeId}, ${productId}, 0, NOW()) ON CONFLICT ("boutiqueId", "produitId") DO NOTHING`;
+    const changed = await tx.$queryRaw<Array<{ id: number; quantite: number }>>`UPDATE "Stock" SET "quantite" = "quantite" + ${data.variationQuantite}, "modifieLe" = NOW()
+      WHERE "boutiqueId" = ${storeId} AND "produitId" = ${productId} AND "quantite" + ${data.variationQuantite} >= 0
+      RETURNING "id", "quantite"`;
+    if (changed.length !== 1) throw Errors.conflict("Cet ajustement ferait passer le stock sous zéro.");
+    const quantiteApres = changed[0]!.quantite;
+    const stock = await tx.stock.findUniqueOrThrow({ where: { boutiqueId_produitId: { boutiqueId: storeId, produitId: productId } } });
 
     await tx.mouvementStock.create({
       data: {
@@ -53,6 +48,9 @@ export async function adjustStock(
         utilisateurId: userId,
         type: StockMovementType.ADJUSTMENT,
         variationQuantite: data.variationQuantite,
+        quantiteAvant: quantiteApres - data.variationQuantite,
+        quantiteApres,
+        creeLe: new Date(),
         note: data.note || null,
       },
     });

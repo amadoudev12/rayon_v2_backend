@@ -29,6 +29,27 @@ enum StockMovementType {
   SALE_CANCELLATION
   ADJUSTMENT
   INITIAL
+  INVENTORY_ADJUSTMENT
+  LOSS
+  LOSS_CANCELLATION
+}
+
+enum InventoryStatus {
+  DRAFT
+  IN_PROGRESS
+  VALIDATED
+  CANCELLED
+}
+
+enum InventorySelectionType {
+  ALL
+  CATEGORY
+  MANUAL
+}
+
+enum LossStatus {
+  ACTIVE
+  CANCELLED
 }
 
 enum SaleStatus {
@@ -46,6 +67,17 @@ enum PaymentMethod {
 
 enum PurchaseStatus {
   RECEIVED
+  CANCELLED
+}
+
+enum RefundStatus {
+  PENDING
+  PARTIALLY_REFUNDED
+  COMPLETED
+}
+
+enum ExpenseStatus {
+  ACTIVE
   CANCELLED
 }
 
@@ -80,7 +112,17 @@ model Utilisateur {
   depenses        Depense[]        @relation("DepenseCreePar")
   mouvementsStock MouvementStock[]
   paiementsVente  PaiementVente[]
+  ventesAnnulees  Vente[]          @relation("VenteAnnulation")
+  demandesRemboursement RemboursementVente[] @relation("RemboursementDemandeur")
+  versementsRemboursement VersementRemboursement[] @relation("RemboursementVersePar")
+  depensesAnnulees Depense[]       @relation("DepenseAnnulation")
   devis           Devis[]          @relation("DevisCreePar")
+  inventairesCrees Inventaire[] @relation("InventaireCreateur")
+  inventairesValides Inventaire[] @relation("InventaireValidateur")
+  inventairesAnnules Inventaire[] @relation("InventaireAnnulateur")
+  lignesInventaireComptees LigneInventaire[] @relation("LigneInventaireCompteur")
+  pertesDeclarees PerteStock[] @relation("PerteDeclarant")
+  pertesAnnulees PerteStock[] @relation("PerteAnnulateur")
 
   creeLe         DateTime @default(now())
   modifieLe      DateTime @updatedAt
@@ -93,6 +135,8 @@ model Organisation {
   nom       String
   slug      String   @unique
   devise    String   @default("XOF")
+  /// Fuseau IANA utilisé pour délimiter les journées et périodes commerciales.
+  fuseauHoraire String @default("Africa/Dakar")
   /// Faux quand le super administrateur a suspendu l'organisation : ses
   /// membres ne peuvent plus utiliser l'application (données conservées).
   actif     Boolean  @default(true)
@@ -108,6 +152,9 @@ model Organisation {
   depenses      Depense[]
   devis         Devis[]
   journauxAudit JournalAudit[]
+  inventaires Inventaire[]
+  pertesStock PerteStock[]
+  seuilsStock SeuilStockBoutique[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
@@ -155,6 +202,9 @@ model Boutique {
   achats          Achat[]
   depenses        Depense[]
   devis           Devis[]
+  inventaires Inventaire[]
+  pertesStock PerteStock[]
+  seuilsStock SeuilStockBoutique[]
 
   creeLe         DateTime @default(now())
   modifieLe      DateTime @updatedAt
@@ -175,6 +225,7 @@ model Categorie {
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   produits       Produit[]
+  inventaires Inventaire[]
 
   creeLe         DateTime @default(now())
   modifieLe      DateTime @updatedAt
@@ -205,6 +256,9 @@ model Produit {
   lignesVente     LigneVente[]
   lignesAchat     LigneAchat[]
   lignesDevis     LigneDevis[]
+  lignesInventaire LigneInventaire[]
+  pertesStock PerteStock[]
+  seuilsStock SeuilStockBoutique[]
 
   creeLe         DateTime @default(now())
   modifieLe      DateTime @updatedAt
@@ -231,12 +285,109 @@ model Stock {
   @@index([produitId])
 }
 
+model SeuilStockBoutique {
+  id Int @id @default(autoincrement())
+  seuilAlerte Int
+  organisationId Int
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  boutiqueId Int
+  boutique Boutique @relation(fields: [boutiqueId], references: [id], onDelete: Cascade)
+  produitId Int
+  produit Produit @relation(fields: [produitId], references: [id], onDelete: Cascade)
+  modifieLe DateTime @updatedAt
+  @@unique([boutiqueId, produitId])
+  @@index([produitId])
+}
+
+model Inventaire {
+  id Int @id @default(autoincrement())
+  reference String @unique
+  libelle String
+  statut InventoryStatus @default(IN_PROGRESS)
+  selectionType InventorySelectionType
+  categorieId Int?
+  categorie Categorie? @relation(fields: [categorieId], references: [id], onDelete: SetNull)
+  produitIds Int[]
+  demarreLe DateTime @default(now())
+  valideLe DateTime?
+  annuleLe DateTime?
+  motifAnnulation String?
+  organisationId Int
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  boutiqueId Int
+  boutique Boutique @relation(fields: [boutiqueId], references: [id], onDelete: Restrict)
+  creeParId Int
+  creePar Utilisateur @relation("InventaireCreateur", fields: [creeParId], references: [id], onDelete: Restrict)
+  valideParId Int?
+  validePar Utilisateur? @relation("InventaireValidateur", fields: [valideParId], references: [id], onDelete: SetNull)
+  annuleParId Int?
+  annulePar Utilisateur? @relation("InventaireAnnulateur", fields: [annuleParId], references: [id], onDelete: SetNull)
+  lignes LigneInventaire[]
+  creeLe DateTime @default(now())
+  modifieLe DateTime @updatedAt
+  @@index([organisationId, boutiqueId, creeLe])
+  @@index([organisationId, statut])
+}
+
+model LigneInventaire {
+  id Int @id @default(autoincrement())
+  produitNom String
+  produitReference String?
+  categorieNom String?
+  quantiteTheorique Int
+  quantiteComptee Int?
+  coutUnitaire Decimal @db.Decimal(12, 2)
+  compteLe DateTime?
+  version Int @default(0)
+  inventaireId Int
+  inventaire Inventaire @relation(fields: [inventaireId], references: [id], onDelete: Cascade)
+  produitId Int
+  produit Produit @relation(fields: [produitId], references: [id], onDelete: Restrict)
+  compteParId Int?
+  comptePar Utilisateur? @relation("LigneInventaireCompteur", fields: [compteParId], references: [id], onDelete: SetNull)
+  mouvements MouvementStock[]
+  @@unique([inventaireId, produitId])
+}
+
+model PerteStock {
+  id Int @id @default(autoincrement())
+  reference String @unique
+  quantite Int
+  motif String
+  description String?
+  coutUnitaire Decimal @db.Decimal(12, 2)
+  statut LossStatus @default(ACTIVE)
+  cleIdempotence String
+  empreinteIdempotence String
+  annuleLe DateTime?
+  motifAnnulation String?
+  organisationId Int
+  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  boutiqueId Int
+  boutique Boutique @relation(fields: [boutiqueId], references: [id], onDelete: Restrict)
+  produitId Int
+  produit Produit @relation(fields: [produitId], references: [id], onDelete: Restrict)
+  declareParId Int
+  declarePar Utilisateur @relation("PerteDeclarant", fields: [declareParId], references: [id], onDelete: Restrict)
+  annuleParId Int?
+  annulePar Utilisateur? @relation("PerteAnnulateur", fields: [annuleParId], references: [id], onDelete: SetNull)
+  mouvements MouvementStock[]
+  creeLe DateTime @default(now())
+  @@unique([organisationId, cleIdempotence])
+  @@index([organisationId, boutiqueId, creeLe])
+  @@index([produitId, statut, creeLe])
+}
+
 /// Historique immuable de chaque variation de stock, pour la traçabilité et les audits.
 model MouvementStock {
   id                Int               @id @default(autoincrement())
   type              StockMovementType
   variationQuantite Int
   note              String?
+  quantiteAvant Int?
+  quantiteApres Int?
+  coutUnitaire Decimal? @db.Decimal(12, 2)
+  sourceReference String?
 
   boutiqueId        Int
   boutique          Boutique @relation(fields: [boutiqueId], references: [id], onDelete: Cascade)
@@ -253,9 +404,16 @@ model MouvementStock {
   achatId           Int?
   achat             Achat?   @relation(fields: [achatId], references: [id], onDelete: SetNull)
 
+  ligneInventaireId Int?
+  ligneInventaire LigneInventaire? @relation(fields: [ligneInventaireId], references: [id], onDelete: SetNull)
+  perteStockId Int?
+  perteStock PerteStock? @relation(fields: [perteStockId], references: [id], onDelete: SetNull)
+
   creeLe            DateTime @default(now())
 
   @@index([boutiqueId, produitId, creeLe])
+  @@index([perteStockId])
+  @@index([ligneInventaireId])
 }
 
 // ---------------------------------------------------------------------------
@@ -329,16 +487,23 @@ model Vente {
 
   lignes          LigneVente[]
   paiements       PaiementVente[]
+  remboursements  RemboursementVente[]
   mouvementsStock MouvementStock[]
   devis           Devis?
 
   creeLe          DateTime  @default(now())
   annuleLe        DateTime?
+  motifAnnulation String?
+  annuleParId     Int?
+  annulePar       Utilisateur? @relation("VenteAnnulation", fields: [annuleParId], references: [id], onDelete: SetNull)
+  cleIdempotence  String?
+  empreinteIdempotence String?
 
   @@index([organisationId, boutiqueId, creeLe])
   @@index([clientId])
   // Statistiques de la plateforme (toutes organisations confondues).
   @@index([creeLe])
+  @@unique([organisationId, cleIdempotence])
 }
 
 /// Prix et coût sont figés au moment de la vente : la marge d'une ancienne
@@ -367,6 +532,9 @@ model PaiementVente {
   id            Int      @id @default(autoincrement())
   montant       Decimal  @db.Decimal(12, 2)
   date          DateTime @default(now())
+  /// Null pour les versements historiques dont le mode réel n'est pas connu.
+  modePaiement  PaymentMethod?
+  cleIdempotence String?
 
   venteId       Int
   vente         Vente    @relation(fields: [venteId], references: [id], onDelete: Cascade)
@@ -375,6 +543,49 @@ model PaiementVente {
   utilisateur   Utilisateur? @relation(fields: [utilisateurId], references: [id], onDelete: SetNull)
 
   @@index([venteId])
+  @@index([date])
+  @@unique([venteId, cleIdempotence])
+}
+
+/// Demande de remboursement liée à une vente. Une annulation payée crée une
+/// demande PENDING ; seuls ses versements confirment l'argent réellement rendu.
+model RemboursementVente {
+  id            Int          @id @default(autoincrement())
+  montant       Decimal      @db.Decimal(12, 2)
+  statut        RefundStatus @default(PENDING)
+  motif         String
+  cleIdempotence String
+
+  venteId       Int
+  vente         Vente        @relation(fields: [venteId], references: [id], onDelete: Restrict)
+
+  demandeParId  Int
+  demandePar    Utilisateur  @relation("RemboursementDemandeur", fields: [demandeParId], references: [id], onDelete: Restrict)
+
+  versements    VersementRemboursement[]
+  creeLe        DateTime     @default(now())
+  modifieLe     DateTime     @updatedAt
+
+  @@unique([venteId, cleIdempotence])
+  @@index([venteId, statut])
+}
+
+/// Versement effectif d'un remboursement. Les demandes peuvent être réglées
+/// en plusieurs fois ; chaque sortie conserve son mode, sa date et son auteur.
+model VersementRemboursement {
+  id                   Int      @id @default(autoincrement())
+  montant              Decimal  @db.Decimal(12, 2)
+  modePaiement         PaymentMethod
+  date                 DateTime @default(now())
+  cleIdempotence       String
+
+  remboursementVenteId Int
+  remboursementVente   RemboursementVente @relation(fields: [remboursementVenteId], references: [id], onDelete: Restrict)
+
+  utilisateurId        Int
+  utilisateur          Utilisateur @relation("RemboursementVersePar", fields: [utilisateurId], references: [id], onDelete: Restrict)
+
+  @@unique([remboursementVenteId, cleIdempotence])
   @@index([date])
 }
 
@@ -493,6 +704,11 @@ model Depense {
   montant        Decimal  @db.Decimal(12, 2)
   note           String?
   date           DateTime @default(now())
+  statut         ExpenseStatus @default(ACTIVE)
+  annuleLe       DateTime?
+  annuleParId    Int?
+  annulePar      Utilisateur? @relation("DepenseAnnulation", fields: [annuleParId], references: [id], onDelete: SetNull)
+  motifAnnulation String?
 
   organisationId Int
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)

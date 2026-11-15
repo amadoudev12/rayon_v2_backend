@@ -5,12 +5,16 @@ import { expenseSchema } from "@/lib/validations/expense";
 import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
 import { getPagination, paginationMeta } from "@/lib/api/pagination";
 import { Errors } from "@/lib/api/errors";
+import { ExpenseStatus } from "@/generated/prisma/enums";
+import { Role } from "@/generated/prisma/enums";
 
 export async function getAllExpenses(req: Request, res: Response) {
   const context = req.user;
   const pagination = getPagination(searchParams(req), 20);
 
-  const where = { organisationId: context.organizationId };
+  const storeId = await resolveActiveStoreId(context, Number(searchParams(req).get("storeId")) || undefined);
+  const where = { organisationId: context.organizationId, statut: ExpenseStatus.ACTIVE,
+    ...(context.membershipStoreId ? { boutiqueId: storeId } : {}) };
 
   const [expenses, total] = await Promise.all([
     prisma.depense.findMany({
@@ -29,7 +33,8 @@ export async function createExpense(req: Request, res: Response) {
   const context = req.user;
 
   const parsed = expenseSchema.parse(req.body);
-  const storeId = parsed.boutiqueId ? await resolveActiveStoreId(context, parsed.boutiqueId) : null;
+  if (parsed.organisationnelle && context.role !== Role.OWNER && context.role !== Role.ADMIN) throw Errors.forbidden("Seul un propriétaire ou administrateur peut créer une charge organisationnelle.");
+  const storeId = parsed.organisationnelle ? null : parsed.boutiqueId ? await resolveActiveStoreId(context, parsed.boutiqueId) : await resolveActiveStoreId(context);
 
   const expense = await prisma.depense.create({
     data: {
@@ -52,8 +57,10 @@ export async function deleteExpense(req: Request, res: Response) {
 
   const expenseId = routeId(req);
 
-  const deleted = await prisma.depense.deleteMany({
-    where: { id: expenseId, organisationId: context.organizationId },
+  const deleted = await prisma.depense.updateMany({
+    where: { id: expenseId, organisationId: context.organizationId, statut: ExpenseStatus.ACTIVE,
+      ...(context.membershipStoreId ? { boutiqueId: context.membershipStoreId } : {}) },
+    data: { statut: ExpenseStatus.CANCELLED, annuleLe: new Date(), annuleParId: context.userId, motifAnnulation: "Annulation demandée" },
   });
   if (deleted.count === 0) throw Errors.notFound("Dépense introuvable");
 

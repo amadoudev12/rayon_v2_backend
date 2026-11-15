@@ -9,6 +9,7 @@ import { SaleStatus } from "@/generated/prisma/enums";
 import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
 import { getPagination, getSort, paginationMeta } from "@/lib/api/pagination";
 import { Errors } from "@/lib/api/errors";
+import { can } from "@/lib/auth/permissions";
 
 const SORT_FIELDS = ["creeLe", "nom", "prixVente"] as const;
 
@@ -52,8 +53,9 @@ export async function getAllProducts(req: Request, res: Response) {
     prisma.produit.count({ where }),
   ]);
 
-  const data = products.map(({ stocks, ...product }) => ({
+  const data = products.map(({ stocks, prixAchat, ...product }) => ({
     ...product,
+    prixAchat: can(context.role, "report:view") ? prixAchat : null,
     quantiteStock: stocks[0]?.quantite ?? 0,
   }));
 
@@ -147,6 +149,7 @@ export async function getProductById(req: Request, res: Response) {
 
   return jsonData(res, {
     ...product,
+    prixAchat: can(context.role, "report:view") ? product.prixAchat : null,
     quantiteStock: product.stocks.find((stock) => stock.boutique.id === storeId)?.quantite ?? 0,
     ventes: {
       nombre: sales._count,

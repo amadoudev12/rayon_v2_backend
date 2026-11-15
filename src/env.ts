@@ -27,3 +27,9 @@ export function allowedOrigins(): string[] {
 export function port(): number {
   return Number(process.env.PORT) || 4000;
 }
+
+/** Nombre de reverse proxies de confiance devant l'API (0 par défaut). */
+export function trustProxyHops(): number {
+  const value = Number(process.env.TRUST_PROXY_HOPS ?? 0);
+  return Number.isSafeInteger(value) && value >= 0 && value <= 5 ? value : 0;
+}

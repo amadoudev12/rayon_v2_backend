@@ -57,7 +57,7 @@ router.get("/shell", verifyPageToken, getShellPage);
 router.get("/dashboard", verifyPageToken, getDashboardPage);
 router.get("/produits", verifyPageToken, getProductsPage);
 router.get("/stock", verifyPageToken, getStockPage);
-router.get("/stock/mouvements", verifyPageToken, getStockMovementsPage);
+router.get("/stock/mouvements", verifyPageToken, requirePermission("stock-movement:read"), getStockMovementsPage);
 router.get("/ventes", verifyPageToken, getSalesPage);
 router.get("/ventes/nouvelle", verifyPageToken, getNewSalePage);
 router.get("/creances", verifyPageToken, getCreditsPage);

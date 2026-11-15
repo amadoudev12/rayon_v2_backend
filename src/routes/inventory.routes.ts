@@ -1,0 +1,13 @@
+import { Router } from "express";
+import { verifyToken } from "@/middleware/verifyToken";
+import { requirePermission } from "@/middleware/requirePermission";
+import * as controller from "@/controllers/inventory.controller";
+const router = Router();
+router.use(verifyToken);
+router.get("/", requirePermission("inventory:read"), controller.list);
+router.post("/", requirePermission("inventory:create"), controller.create);
+router.get("/:id", requirePermission("inventory:read"), controller.detail);
+router.put("/:id/lines/:lineId/count", requirePermission("inventory:count"), controller.count);
+router.post("/:id/validate", requirePermission("inventory:validate"), controller.validate);
+router.post("/:id/cancel", requirePermission("inventory:cancel"), controller.cancel);
+export default router;

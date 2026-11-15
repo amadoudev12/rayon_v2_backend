@@ -8,6 +8,8 @@ import {
   cancelSale,
   getSalesStatsSummary,
   addSalePayment,
+  requestRefund,
+  makeRefundPayout,
 } from "@/controllers/sale.controller";
 
 const router = Router();
@@ -19,5 +21,7 @@ router.get("/:id", verifyToken, getSaleById);
 router.post("/:id/cancel", verifyToken, requirePermission("sale:cancel"), cancelSale);
 // Encaisser un versement est un geste de caisse : mêmes rôles que la vente.
 router.post("/:id/payments", verifyToken, requirePermission("sale:create"), addSalePayment);
+router.post("/:id/refunds", verifyToken, requirePermission("refund:manage"), requestRefund);
+router.post("/refunds/:id/payouts", verifyToken, requirePermission("refund:manage"), makeRefundPayout);
 
 export default router;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { createSale, cancelSale } from "@/services/sale";
+import { createSale, cancelSale, createRefundRequest, payRefund } from "@/services/sale";
 import { SaleStatus, StockMovementType } from "@/generated/prisma/enums";
 import { createProduit, createShop, resetDatabase, stockOf } from "./helpers/factories";
 
@@ -77,17 +77,28 @@ describe("createSale — enregistrement d'une vente", () => {
     expect(await stockOf(shop.boutique.id, produit.id)).toBe(7);
   });
 
-  it("plafonne le total à 0 quand la remise dépasse le sous-total", async () => {
+  it("refuse une remise supérieure au sous-total et restaure le stock par rollback", async () => {
     const shop = await createShop();
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1000 });
 
-    const sale = await createSale(shop.context, shop.boutique.id, {
+    await expect(createSale(shop.context, shop.boutique.id, {
       lignes: [{ produitId: produit.id, quantite: 1 }],
       modePaiement: "CASH",
       remise: 5000,
-    });
+    })).rejects.toMatchObject({ status: 409 });
+    expect(await stockOf(shop.boutique.id, produit.id)).toBe(10);
+  });
 
-    expect(Number(sale.total)).toBe(0);
+  it("rend une création rejouée idempotente et refuse la même clé pour un autre panier", async () => {
+    const shop = await createShop();
+    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { stock: 5 });
+    const input = { lignes: [{ produitId: produit.id, quantite: 1 }], modePaiement: "CASH" as const, remise: 0 };
+    const first = await createSale(shop.context, shop.boutique.id, input, "sale-test-0001");
+    const retry = await createSale(shop.context, shop.boutique.id, input, "sale-test-0001");
+    expect(retry.id).toBe(first.id);
+    expect(await stockOf(shop.boutique.id, produit.id)).toBe(4);
+    await expect(createSale(shop.context, shop.boutique.id, { ...input, lignes: [{ produitId: produit.id, quantite: 2 }] }, "sale-test-0001"))
+      .rejects.toMatchObject({ status: 409 });
   });
 
   it("enregistre un paiement partiel quand le montant payé est fourni", async () => {
@@ -196,6 +207,8 @@ describe("cancelSale — annulation d'une vente", () => {
 
     expect(cancelled.statut).toBe(SaleStatus.CANCELLED);
     expect(cancelled.annuleLe).toBeInstanceOf(Date);
+    expect(cancelled.remboursements).toHaveLength(1);
+    expect(cancelled.remboursements[0].statut).toBe("PENDING");
     expect(await stockOf(shop.boutique.id, produit.id)).toBe(10);
 
     const annulation = await prisma.mouvementStock.findFirstOrThrow({
@@ -218,5 +231,32 @@ describe("cancelSale — annulation d'une vente", () => {
 
     await expect(cancelSale(other.context, sale.id)).rejects.toMatchObject({ status: 404 });
     expect(await stockOf(shop.boutique.id, produit.id)).toBe(6);
+  });
+});
+
+describe("remboursements", () => {
+  it("crée une obligation de remboursement pour l'acompte d'une vente à crédit annulée", async () => {
+    const shop = await createShop();
+    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1000, stock: 4 });
+    const client = await prisma.client.create({ data: { organisationId: shop.organisation.id, nom: "Client" } });
+    const sale = await createSale(shop.context, shop.boutique.id, { lignes: [{ produitId: produit.id, quantite: 1 }], modePaiement: "CREDIT", clientId: client.id, montantPaye: 250, remise: 0 });
+    const cancelled = await cancelSale(shop.context, sale.id, "Commande annulée");
+    expect(Number(cancelled.remboursements[0].montant)).toBe(250);
+    expect(cancelled.remboursements[0].statut).toBe("PENDING");
+  });
+
+  it("garde une demande en attente puis trace les remboursements partiels jusqu'au solde", async () => {
+    const shop = await createShop();
+    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1000, stock: 4 });
+    const sale = await createSale(shop.context, shop.boutique.id, { lignes: [{ produitId: produit.id, quantite: 1 }], modePaiement: "CASH", remise: 0 });
+    const request = await createRefundRequest(shop.context, sale.id, 700, "Retour partiel", "refund-test-0001");
+    expect(request.statut).toBe("PENDING");
+
+    const first = await payRefund(shop.context, request.id, 200, "CASH", "payout-test-0001");
+    expect(first.statut).toBe("PARTIALLY_REFUNDED");
+    const completed = await payRefund(shop.context, request.id, 500, "MOBILE_MONEY", "payout-test-0002");
+    expect(completed.statut).toBe("COMPLETED");
+    expect(completed.versements).toHaveLength(2);
+    await expect(createRefundRequest(shop.context, sale.id, 400, "Dépassement", "refund-test-0002")).rejects.toMatchObject({ status: 409 });
   });
 });
