@@ -6,11 +6,13 @@ import { prisma } from "@/lib/prisma";
 import { verifyCredentials } from "@/lib/auth/credentials";
 import { hashPassword } from "@/lib/auth/password";
 import { identifierTakenMessage, identifierWhere, parseIdentifier } from "@/lib/auth/identifier";
-import { getAccountHome, resolveActiveStoreId } from "@/lib/auth/session";
+import { getAccountHome, getSession, resolveActiveStoreId } from "@/lib/auth/session";
 import { ACTIVE_STORE_COOKIE } from "@/lib/auth/store";
-import { clearSessionCookie, cookieBaseOptions, issueSessionToken, setSessionCookie } from "@/lib/auth/token";
+import { clearSessionCookie, cookieBaseOptions, issueSessionToken, revokeSession, revokeUserSessions, setSessionCookie } from "@/lib/auth/token";
+import { recordSecurityEvent } from "@/lib/auth/security-log";
+import { changeOwnPassword, listActiveSessions } from "@/services/security";
 import { SESSION_RENEW_AFTER_MS, renewSessionCookie } from "@/lib/auth/web-session";
-import { loginSchema, registerSchema } from "@/lib/validations/auth";
+import { loginSchema, passwordSchema, registerSchema } from "@/lib/validations/auth";
 import { onboardingSchema } from "@/lib/validations/onboarding";
 import { recordAuditLog } from "@/lib/api/audit";
 import { jsonData, jsonMessage } from "@/lib/api/response";
@@ -28,16 +30,57 @@ export async function login(req: Request, res: Response) {
   const parsed = loginSchema.parse(req.body);
 
   const user = await verifyCredentials(parsed.identifiant, parsed.motDePasse);
-  if (!user) throw new ApiError(401, "Identifiant ou mot de passe incorrect.");
+  if (!user) {
+    await recordSecurityEvent({ evenement: "login.failure", identifiant: parsed.identifiant, metadonnees: { client: "web" } });
+    throw new ApiError(401, "Identifiant ou mot de passe incorrect.");
+  }
 
   const { token, expiresAt } = await issueSessionToken(user, "web");
   setSessionCookie(res, token);
-  return jsonData(res, { expiresAt });
+  await recordSecurityEvent({ evenement: "login.success", utilisateurId: user.id, metadonnees: { client: "web" } });
+  return jsonData(res, { expiresAt, doitChangerMotDePasse: user.doitChangerMotDePasse });
 }
 
+/**
+ * Déconnexion RÉELLE : la session du jeton présenté (cookie du site ou jeton
+ * Bearer du mobile) est révoquée en base ; le jeton devient inutilisable même
+ * s'il avait été copié.
+ */
 export async function logout(req: Request, res: Response) {
+  const session = await getSession();
+  if (session?.sessionId) {
+    await revokeSession(session.sessionId, "Déconnexion");
+    await recordSecurityEvent({ evenement: "logout", utilisateurId: session.user.id, metadonnees: { client: session.audience ?? null } });
+  }
   clearSessionCookie(res);
   return jsonMessage(res, "Déconnecté");
+}
+
+const passwordChangeSchema = z.object({
+  motDePasseActuel: z.string().min(1, "Le mot de passe actuel est requis."),
+  nouveauMotDePasse: passwordSchema,
+});
+
+/** Changement de mot de passe : ferme toutes les autres sessions du compte. */
+export async function changePassword(req: Request, res: Response) {
+  const parsed = passwordChangeSchema.parse(req.body);
+  const session = await getSession();
+  await changeOwnPassword(req.user.userId, session?.sessionId, parsed.motDePasseActuel, parsed.nouveauMotDePasse);
+  return jsonMessage(res, "Mot de passe modifié. Vos autres appareils ont été déconnectés.");
+}
+
+export async function getSessions(req: Request, res: Response) {
+  const session = await getSession();
+  const sessions = await listActiveSessions(req.user.userId);
+  return jsonData(res, sessions.map((item) => ({ ...item, courante: item.id === session?.sessionId })));
+}
+
+/** « Déconnecter mes autres appareils ». */
+export async function revokeOtherSessions(req: Request, res: Response) {
+  const session = await getSession();
+  const count = await revokeUserSessions(req.user.userId, "Déconnexion des autres appareils", session?.sessionId);
+  await recordSecurityEvent({ evenement: "sessions.revoked", utilisateurId: req.user.userId, metadonnees: { nombre: count } });
+  return jsonData(res, { sessionsFermees: count });
 }
 
 /**
@@ -106,13 +149,17 @@ export async function mobileLogin(req: Request, res: Response) {
   const parsed = loginSchema.parse(req.body);
 
   const user = await verifyCredentials(parsed.identifiant, parsed.motDePasse);
-  if (!user) throw new ApiError(401, "Identifiant ou mot de passe incorrect.");
+  if (!user) {
+    await recordSecurityEvent({ evenement: "login.failure", identifiant: parsed.identifiant, metadonnees: { client: "mobile" } });
+    throw new ApiError(401, "Identifiant ou mot de passe incorrect.");
+  }
 
   // L'administration de la plateforme n'existe que sur le web.
   if (user.superAdmin) throw Errors.platformAccountOnly();
 
   const { token, expiresAt } = await issueSessionToken(user, "mobile");
-  return jsonData(res, { token, expiresAt });
+  await recordSecurityEvent({ evenement: "login.success", utilisateurId: user.id, metadonnees: { client: "mobile" } });
+  return jsonData(res, { token, expiresAt, doitChangerMotDePasse: user.doitChangerMotDePasse });
 }
 
 export async function register(req: Request, res: Response) {

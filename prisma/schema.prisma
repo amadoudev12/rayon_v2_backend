@@ -110,11 +110,15 @@ model Utilisateur {
   /// Gestionnaire de la plateforme SaaS. Rôle global, distinct du rôle
   /// d'un membre dans une organisation : un super administrateur n'a jamais
   /// d'adhésion (`Membre`) et n'accède qu'à l'espace /admin.
-  superAdmin         Boolean   @default(false)
+  superAdmin            Boolean   @default(false)
   /// Compte désactivé par le super administrateur : connexion refusée.
-  actif              Boolean   @default(true)
+  actif                 Boolean   @default(true)
   /// Dernière requête authentifiée (mise à jour au plus toutes les 15 minutes).
-  derniereActiviteLe DateTime?
+  derniereActiviteLe    DateTime?
+  /// Vrai après une réinitialisation par un responsable : le mot de passe
+  /// temporaire doit être changé avant toute autre opération.
+  doitChangerMotDePasse Boolean   @default(false)
+  motDePasseModifieLe   DateTime?
 
   membre                   Membre?
   journauxAudit            JournalAudit[]
@@ -136,6 +140,8 @@ model Utilisateur {
   pertesAnnulees           PerteStock[]             @relation("PerteAnnulateur")
   retoursVente             RetourVente[]            @relation("RetourCreePar")
   paiementsAnnules         PaiementVente[]          @relation("PaiementAnnulation")
+  sessions                 SessionUtilisateur[]
+  evenementsSecurite       JournalSecurite[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
@@ -144,15 +150,19 @@ model Utilisateur {
 /// Un client SaaS (tenant). Toutes les données métier sont rattachées à une
 /// Organisation et ne doivent jamais fuiter d'une organisation à l'autre.
 model Organisation {
-  id            Int     @id @default(autoincrement())
-  nom           String
-  slug          String  @unique
-  devise        String  @default("XOF")
+  id                  Int     @id @default(autoincrement())
+  nom                 String
+  slug                String  @unique
+  devise              String  @default("XOF")
   /// Fuseau IANA utilisé pour délimiter les journées et périodes commerciales.
-  fuseauHoraire String  @default("Africa/Dakar")
+  fuseauHoraire       String  @default("Africa/Dakar")
   /// Faux quand le super administrateur a suspendu l'organisation : ses
   /// membres ne peuvent plus utiliser l'application (données conservées).
-  actif         Boolean @default(true)
+  actif               Boolean @default(true)
+  /// Remise maximale (en % du prix catalogue) accordée par un vendeur.
+  remiseMaxVendeurPct Int     @default(10)
+  /// Remise maximale accordée par un gérant. Propriétaire et administrateur : sans limite.
+  remiseMaxGerantPct  Int     @default(30)
 
   membres       Membre[]
   boutiques     Boutique[]
@@ -450,6 +460,10 @@ model Client {
   email     String?
   adresse   String?
 
+  /// Client archivé : masqué des listes et des nouvelles ventes, historique conservé.
+  archive   Boolean   @default(false)
+  archiveLe DateTime?
+
   organisationId Int
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
@@ -459,7 +473,7 @@ model Client {
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
 
-  @@index([organisationId])
+  @@index([organisationId, archive])
 }
 
 model Fournisseur {
@@ -469,6 +483,10 @@ model Fournisseur {
   email     String?
   adresse   String?
 
+  /// Fournisseur archivé : masqué des listes et des nouveaux achats, historique conservé.
+  archive   Boolean   @default(false)
+  archiveLe DateTime?
+
   organisationId Int
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
@@ -477,7 +495,7 @@ model Fournisseur {
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
 
-  @@index([organisationId])
+  @@index([organisationId, archive])
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +528,7 @@ model Vente {
   boutique   Boutique @relation(fields: [boutiqueId], references: [id], onDelete: Cascade)
 
   clientId Int?
-  client   Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
 
   vendeurId Int
   vendeur   Utilisateur @relation("VenteVendeur", fields: [vendeurId], references: [id])
@@ -770,7 +788,7 @@ model Achat {
   boutique   Boutique @relation(fields: [boutiqueId], references: [id], onDelete: Cascade)
 
   fournisseurId Int?
-  fournisseur   Fournisseur? @relation(fields: [fournisseurId], references: [id], onDelete: SetNull)
+  fournisseur   Fournisseur? @relation(fields: [fournisseurId], references: [id], onDelete: Restrict)
 
   creeParId Int
   creePar   Utilisateur @relation("AchatCreePar", fields: [creeParId], references: [id])
@@ -847,4 +865,57 @@ model JournalAudit {
 
   @@index([organisationId, creeLe])
   @@index([creeLe])
+}
+
+// ---------------------------------------------------------------------------
+// Sécurité : sessions, journal de sécurité, limitation de débit
+// ---------------------------------------------------------------------------
+
+/// Session ouverte par une connexion (site ou mobile). Le jeton signé porte
+/// l'identifiant de session : une session révoquée ou expirée est refusée dès
+/// la requête suivante (déconnexion réelle, changement de mot de passe…).
+model SessionUtilisateur {
+  id                  String    @id
+  audience            String
+  creeLe              DateTime  @default(now())
+  expireLe            DateTime
+  revoqueLe           DateTime?
+  motifRevocation     String?
+  derniereUtilisation DateTime  @default(now())
+  adresseIp           String?
+  agentUtilisateur    String?
+
+  utilisateurId Int
+  utilisateur   Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+
+  @@index([utilisateurId, revoqueLe])
+}
+
+/// Événements de sécurité (connexions, mots de passe, sessions), y compris
+/// pour les comptes sans organisation. Ajout seul.
+model JournalSecurite {
+  id          Int      @id @default(autoincrement())
+  evenement   String
+  identifiant String?
+  adresseIp   String?
+  metadonnees Json?
+  creeLe      DateTime @default(now())
+
+  utilisateurId Int?
+  utilisateur   Utilisateur? @relation(fields: [utilisateurId], references: [id], onDelete: SetNull)
+
+  @@index([utilisateurId, creeLe])
+  @@index([evenement, creeLe])
+}
+
+/// Compteurs de limitation de débit partagés par toutes les instances de l'API.
+model CompteurLimite {
+  cle          String    @id
+  compteur     Int
+  fenetreDebut DateTime
+  bloqueJusqua DateTime?
+  rejets       Int       @default(0)
+  modifieLe    DateTime  @default(now())
+
+  @@index([modifieLe])
 }

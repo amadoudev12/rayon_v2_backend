@@ -162,10 +162,10 @@ export async function createSale(
 
   if (data.clientId) {
     const customer = await prisma.client.findFirst({
-      where: { id: data.clientId, organisationId: organizationId },
+      where: { id: data.clientId, organisationId: organizationId, archive: false },
       select: { id: true },
     });
-    if (!customer) throw Errors.notFound("Client introuvable");
+    if (!customer) throw Errors.notFound("Client introuvable ou archivé");
   }
 
   try {
@@ -260,6 +260,32 @@ export async function createSale(
           venteId: sale.id,
         })),
       });
+
+      // Toute dérogation au prix catalogue (prix négocié, remise) est tracée.
+      const overrides = saleLines.filter((line) => !line.prixUnitaire.equals(line.produit.prixVente));
+      if (overrides.length > 0 || remise.greaterThan(0)) {
+        await recordAuditLog(
+          {
+            organisationId: organizationId,
+            utilisateurId: userId,
+            action: "sale.price_override",
+            entite: "Sale",
+            entiteId: sale.id,
+            metadonnees: {
+              remise: remise.toString(),
+              sousTotal: sousTotal.toString(),
+              total: total.toString(),
+              lignes: overrides.map((line) => ({
+                produitId: line.produitId,
+                prixCatalogue: line.produit.prixVente.toString(),
+                prixApplique: line.prixUnitaire.toString(),
+                quantite: line.quantite,
+              })),
+            },
+          },
+          tx,
+        );
+      }
 
       // Devis transformé : il est relié à la vente, une seule fois. Sinon toute
       // la vente est annulée (stock compris) par l'échec de la transaction.

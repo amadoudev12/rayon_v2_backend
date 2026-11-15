@@ -25,6 +25,9 @@ export const SESSION_EXPIRED_PATH = "/api/session/expired";
 /** Accueil de l'espace d'administration de la plateforme. */
 export const SUPER_ADMIN_HOME = "/admin";
 
+/** Page où un membre doit remplacer son mot de passe temporaire. */
+export const PASSWORD_CHANGE_PATH = "/changer-mot-de-passe";
+
 /** Page affichée aux membres d'une organisation suspendue. */
 export const SUSPENDED_PATH = "/suspendu";
 
@@ -53,6 +56,7 @@ const loadAccount = requestCache(async (userId: number) => {
       superAdmin: true,
       actif: true,
       derniereActiviteLe: true,
+      doitChangerMotDePasse: true,
       membre: {
         select: { role: true, organisationId: true, boutiqueId: true, organisation: { select: { actif: true } } },
       },
@@ -91,7 +95,7 @@ type AccountState =
   | { status: "superadmin"; userId: number }
   /** Membre d'une organisation suspendue par le super administrateur. */
   | { status: "suspended" }
-  | { status: "member"; context: AuthContext };
+  | { status: "member"; context: AuthContext; mustChangePassword: boolean };
 
 async function resolveAccount(): Promise<AccountState> {
   const session = await getSession();
@@ -116,6 +120,7 @@ async function resolveAccount(): Promise<AccountState> {
 
   return {
     status: "member",
+    mustChangePassword: account.doitChangerMotDePasse,
     context: {
       userId,
       organizationId: account.membre.organisationId,
@@ -148,13 +153,16 @@ export async function requireUserId(): Promise<number> {
  * Throws 401 when not authenticated or when access was revoked, 409 when
  * onboarding is incomplete.
  */
-export async function requireAuthContext(): Promise<AuthContext> {
+export async function requireAuthContext(options: { allowPendingPasswordChange?: boolean } = {}): Promise<AuthContext> {
   const state = await resolveAccount();
   if (state.status === "anonymous") throw Errors.unauthenticated();
   if (state.status === "revoked") throw Errors.accessRevoked();
   if (state.status === "onboarding") throw Errors.onboardingRequired();
   if (state.status === "superadmin") throw Errors.platformAccountOnly();
   if (state.status === "suspended") throw Errors.organizationSuspended();
+  // Mot de passe temporaire (réinitialisé par un responsable) : seul le
+  // changement de mot de passe, le profil et la déconnexion restent permis.
+  if (state.mustChangePassword && !options.allowPendingPasswordChange) throw Errors.passwordChangeRequired();
   return state.context;
 }
 
@@ -172,6 +180,7 @@ export async function requirePageAuthContext(): Promise<AuthContext> {
   if (state.status === "onboarding") redirect("/onboarding");
   if (state.status === "superadmin") redirect(SUPER_ADMIN_HOME);
   if (state.status === "suspended") redirect(SUSPENDED_PATH);
+  if (state.mustChangePassword) redirect(PASSWORD_CHANGE_PATH);
   return state.context;
 }
 

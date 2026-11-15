@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import * as saleService from "@/services/sale";
 import { createSaleReturn } from "@/services/sale-return";
+import { pricePolicyFor } from "@/services/pricing-policy";
 import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
 import { prisma } from "@/lib/prisma";
 import { containsText } from "@/lib/search";
@@ -65,7 +66,7 @@ export async function createSale(req: Request, res: Response) {
   const parsed = saleSchema.parse(req.body);
   const storeId = await resolveActiveStoreId(context, parsed.boutiqueId);
 
-  const sale = await saleService.createSale(context, storeId, parsed, requireIdempotencyKey(req));
+  const sale = await saleService.createSale(context, storeId, parsed, requireIdempotencyKey(req), await pricePolicyFor(context));
   return jsonData(res, serializeSale(sale, canViewCosts(req)), { status: 201 });
 }
 

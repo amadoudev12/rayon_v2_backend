@@ -5,6 +5,7 @@ import { supplierSchema } from "@/lib/validations/supplier";
 import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
 import { getPagination, paginationMeta } from "@/lib/api/pagination";
 import { Errors } from "@/lib/api/errors";
+import { archiveFilter, removeSupplier, restoreSupplier } from "@/services/party";
 
 export async function getAllSuppliers(req: Request, res: Response) {
   const context = req.user;
@@ -14,6 +15,7 @@ export async function getAllSuppliers(req: Request, res: Response) {
 
   const where = {
     organisationId: context.organizationId,
+    ...archiveFilter(params),
     ...(search ? { OR: [{ nom: containsText(search) }, { telephone: containsText(search) }] } : {}),
   };
 
@@ -69,15 +71,15 @@ export async function updateSupplier(req: Request, res: Response) {
   return jsonData(res, supplier);
 }
 
+/** Supprime un fournisseur sans historique ; l'archive sinon (historique conservé). */
 export async function deleteSupplier(req: Request, res: Response) {
-  const context = req.user;
-
-  const supplierId = routeId(req);
-
-  const deleted = await prisma.fournisseur.deleteMany({
-    where: { id: supplierId, organisationId: context.organizationId },
+  const result = await removeSupplier(req.user, routeId(req));
+  return jsonData(res, result, {
+    status: 200,
   });
-  if (deleted.count === 0) throw Errors.notFound("Fournisseur introuvable");
+}
 
-  return jsonMessage(res, "Fournisseur supprimé");
+export async function restoreSupplierHandler(req: Request, res: Response) {
+  await restoreSupplier(req.user, routeId(req));
+  return jsonMessage(res, "Fournisseur restauré");
 }

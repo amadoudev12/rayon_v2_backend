@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { Errors } from "@/lib/api/errors";
+import { recordAuditLog } from "@/lib/api/audit";
 import { StockMovementType } from "@/generated/prisma/enums";
 import type { ProductFormData, ProductImportRow } from "@/lib/validations/product";
 import type { AuthContext } from "@/lib/auth/session";
@@ -91,6 +92,12 @@ export async function updateProduct(
     if (!category) throw Errors.notFound("Catégorie introuvable");
   }
 
+  const before = await prisma.produit.findFirst({
+    where: { id: productId, organisationId: organizationId },
+    select: { prixAchat: true, prixVente: true },
+  });
+  if (!before) throw Errors.notFound("Produit introuvable");
+
   const updated = await prisma.produit.updateMany({
     where: { id: productId, organisationId: organizationId },
     data: {
@@ -110,7 +117,21 @@ export async function updateProduct(
 
   if (updated.count === 0) throw Errors.notFound("Produit introuvable");
 
-  return prisma.produit.findUnique({ where: { id: productId } });
+  const after = await prisma.produit.findUniqueOrThrow({ where: { id: productId } });
+  if (!after.prixAchat.equals(before.prixAchat) || !after.prixVente.equals(before.prixVente)) {
+    await recordAuditLog({
+      organisationId: organizationId,
+      utilisateurId: context.userId,
+      action: "product.price_changed",
+      entite: "Produit",
+      entiteId: productId,
+      metadonnees: {
+        prixAchat: { avant: before.prixAchat.toString(), apres: after.prixAchat.toString() },
+        prixVente: { avant: before.prixVente.toString(), apres: after.prixVente.toString() },
+      },
+    });
+  }
+  return after;
 }
 
 export async function deleteProduct(context: AuthContext, productId: number) {

@@ -1,5 +1,10 @@
 import { prisma } from "@/lib/prisma";
-import { verifyPassword } from "@/lib/auth/password";
+import { randomUUID } from "node:crypto";
+import { hashPassword, verifyPassword } from "@/lib/auth/password";
+
+/** Empreinte (même coût que les vrais mots de passe) d'une valeur aléatoire, calculée une fois. */
+let dummyHash: Promise<string> | null = null;
+const getDummyHash = () => (dummyHash ??= hashPassword(randomUUID()));
 import { identifierWhere, parseIdentifier } from "@/lib/auth/identifier";
 
 /**
@@ -19,7 +24,12 @@ export async function verifyCredentials(identifiant: string, motDePasse: string)
 
   const user = await prisma.utilisateur.findUnique({ where: identifierWhere(identifier) });
   // Un compte désactivé par le super administrateur ne peut plus se connecter.
-  if (!user || !user.actif) return null;
+  // Comparaison factice si le compte n'existe pas : même durée de réponse,
+  // l'existence d'un compte ne se devine pas au chronomètre.
+  if (!user || !user.actif) {
+    await verifyPassword(motDePasse, await getDummyHash());
+    return null;
+  }
 
   const isValid = await verifyPassword(motDePasse, user.motDePasseHash);
   if (!isValid) return null;

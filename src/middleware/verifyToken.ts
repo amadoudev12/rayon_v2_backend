@@ -19,6 +19,15 @@ export async function verifyToken(req: Request, _res: Response, next: NextFuncti
  * erreur, le site reçoit la page vers laquelle rediriger le visiteur
  * (connexion, onboarding, administration…).
  */
+/**
+ * Variante qui laisse passer un membre au mot de passe temporaire : réservée
+ * au changement de mot de passe, au profil et à la déconnexion.
+ */
+export async function verifyTokenAllowingPasswordChange(req: Request, _res: Response, next: NextFunction) {
+  req.user = await requireAuthContext({ allowPendingPasswordChange: true });
+  next();
+}
+
 export async function verifyPageToken(req: Request, _res: Response, next: NextFunction) {
   req.user = await requirePageAuthContext();
   next();

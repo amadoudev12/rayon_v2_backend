@@ -6,6 +6,7 @@ import {
   createCustomer,
   updateCustomer,
   deleteCustomer,
+  restoreCustomerHandler,
 } from "@/controllers/customer.controller";
 
 const router = Router();
@@ -13,6 +14,8 @@ const router = Router();
 router.get("/", verifyToken, getAllCustomers);
 router.post("/", verifyToken, requirePermission("customer:manage"), createCustomer);
 router.put("/:id", verifyToken, requirePermission("customer:manage"), updateCustomer);
-router.delete("/:id", verifyToken, requirePermission("customer:manage"), deleteCustomer);
+// Supprimer (sans historique) ou archiver : réservé aux responsables.
+router.delete("/:id", verifyToken, requirePermission("customer:delete"), deleteCustomer);
+router.post("/:id/restore", verifyToken, requirePermission("customer:delete"), restoreCustomerHandler);
 
 export default router;

@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { IDENTIFIER_FORMAT_MESSAGE, parseIdentifier } from "@/lib/auth/identifier";
 
+/** Règle commune à tous les mots de passe (inscription, changement, réinitialisation). */
+export const passwordSchema = z
+  .string()
+  .min(8, "Le mot de passe doit contenir au moins 8 caractères.")
+  .max(128, "Le mot de passe est trop long.")
+  .regex(/[A-Za-z]/, "Le mot de passe doit contenir au moins une lettre.")
+  .regex(/[0-9]/, "Le mot de passe doit contenir au moins un chiffre.");
+
 /** Identifiant de connexion : adresse email ou numéro de téléphone avec indicatif. */
 export const identifierSchema = z
   .string()
@@ -18,11 +26,7 @@ export const registerSchema = z.object({
     .trim()
     .min(2, "Le nom doit contenir au moins 2 caractères."),
   identifiant: identifierSchema,
-  motDePasse: z
-    .string()
-    .min(8, "Le mot de passe doit contenir au moins 8 caractères.")
-    .regex(/[A-Za-z]/, "Le mot de passe doit contenir au moins une lettre.")
-    .regex(/[0-9]/, "Le mot de passe doit contenir au moins un chiffre."),
+  motDePasse: z.lazy(() => passwordSchema),
 });
 
 export type RegisterFormData = z.infer<typeof registerSchema>;

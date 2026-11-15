@@ -7,6 +7,22 @@ import { Role } from "@/generated/prisma/enums";
 import { recordAuditLog } from "@/lib/api/audit";
 import { jsonData, jsonMessage, routeId } from "@/lib/api/response";
 import { Errors } from "@/lib/api/errors";
+import { revokeUserSessions } from "@/lib/auth/token";
+import { passwordSchema } from "@/lib/validations/auth";
+import { resetMemberPassword } from "@/services/security";
+import { z } from "zod";
+
+const resetSchema = z.object({ motDePasseTemporaire: passwordSchema });
+
+/**
+ * Réinitialisation du mot de passe d'un employé par un responsable : mot de
+ * passe temporaire à changer à la prochaine connexion, sessions fermées.
+ */
+export async function resetPassword(req: Request, res: Response) {
+  const parsed = resetSchema.parse(req.body);
+  await resetMemberPassword(req.user, routeId(req), parsed.motDePasseTemporaire);
+  return jsonMessage(res, "Mot de passe réinitialisé. Le membre devra le changer à sa prochaine connexion.");
+}
 
 export async function getAllMembers(req: Request, res: Response) {
   const context = req.user;
@@ -51,7 +67,8 @@ export async function createMember(req: Request, res: Response) {
 
   const membership = await prisma.$transaction(async (tx) => {
     const user = await tx.utilisateur.create({
-      data: { prenom: parsed.prenom, nom: parsed.nom, ...identifierWhere(identifier), motDePasseHash },
+      // Mot de passe choisi par le responsable : à remplacer à la première connexion.
+      data: { prenom: parsed.prenom, nom: parsed.nom, ...identifierWhere(identifier), motDePasseHash, doitChangerMotDePasse: true },
     });
 
     return tx.membre.create({
@@ -92,6 +109,8 @@ export async function deleteMember(req: Request, res: Response) {
   // compte échouait dès qu'il avait une activité). Sans adhésion, l'accès à
   // l'organisation est coupé dès la requête suivante (voir lib/auth/session).
   await prisma.membre.delete({ where: { id: membership.id } });
+  // Ses appareils encore connectés sont déconnectés immédiatement.
+  await revokeUserSessions(membership.utilisateurId, "Retrait de l'organisation");
 
   await recordAuditLog({
     organisationId: context.organizationId,

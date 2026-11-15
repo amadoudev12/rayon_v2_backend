@@ -17,7 +17,7 @@ export async function getAccountProfile(context: AuthContext) {
   const [user, organization, stores, defaultStoreId] = await Promise.all([
     prisma.utilisateur.findUniqueOrThrow({
       where: { id: context.userId },
-      select: { id: true, prenom: true, nom: true, email: true, telephone: true },
+      select: { id: true, prenom: true, nom: true, email: true, telephone: true, doitChangerMotDePasse: true },
     }),
     prisma.organisation.findUniqueOrThrow({
       where: { id: context.organizationId },
@@ -37,6 +37,8 @@ export async function getAccountProfile(context: AuthContext) {
 
   return {
     user,
+    /** Vrai : le mot de passe temporaire doit être changé avant toute autre opération. */
+    doitChangerMotDePasse: user.doitChangerMotDePasse,
     organization,
     role: context.role,
     roleLabel: ROLE_LABELS[context.role],

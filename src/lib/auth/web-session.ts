@@ -32,7 +32,7 @@ export async function renewSessionCookie(res: Response, options: { olderThanMs?:
   });
   if (!user || !user.actif) return false;
 
-  const { token } = await issueSessionToken(user, "web");
+  const { token } = await issueSessionToken(user, "web", session.sessionId);
   setSessionCookie(res, token);
   return true;
 }

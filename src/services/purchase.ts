@@ -40,10 +40,10 @@ export async function createPurchase(
 
   if (data.fournisseurId) {
     const supplier = await prisma.fournisseur.findFirst({
-      where: { id: data.fournisseurId, organisationId: organizationId },
+      where: { id: data.fournisseurId, organisationId: organizationId, archive: false },
       select: { id: true },
     });
-    if (!supplier) throw Errors.notFound("Fournisseur introuvable");
+    if (!supplier) throw Errors.notFound("Fournisseur introuvable ou archivé");
   }
 
   const lines = data.lignes.map((line) => ({

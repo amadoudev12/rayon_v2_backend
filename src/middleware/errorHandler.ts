@@ -19,7 +19,16 @@ export function errorHandler(error: unknown, _req: Request, res: Response, next:
 
 export function handleApiError(error: unknown, res: Response) {
   if (error instanceof ApiError) {
-    return res.status(error.status).json({ message: error.message, ...(error.details ? { errors: error.details } : {}) });
+    if (error.code === "RATE_LIMITED") {
+      const retryAfter = (error.details as { retryAfter?: number } | undefined)?.retryAfter;
+      if (retryAfter) res.setHeader("Retry-After", String(retryAfter));
+      return res.status(error.status).json({ message: error.message, code: error.code });
+    }
+    return res.status(error.status).json({
+      message: error.message,
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.details ? { errors: error.details } : {}),
+    });
   }
 
   if (error instanceof PageRedirect) {

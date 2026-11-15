@@ -2,11 +2,14 @@
 export class ApiError extends Error {
   readonly status: number;
   readonly details?: unknown;
+  /** Code stable, lisible par les clients (ex : PASSWORD_CHANGE_REQUIRED). */
+  readonly code?: string;
 
-  constructor(status: number, message: string, details?: unknown) {
+  constructor(status: number, message: string, details?: unknown, code?: string) {
     super(message);
     this.status = status;
     this.details = details;
+    this.code = code;
   }
 }
 
@@ -39,4 +42,8 @@ export const Errors = {
   notFound: (message = "Ressource introuvable") => new ApiError(404, message),
   invalidId: () => new ApiError(400, "Identifiant invalide"),
   conflict: (message: string) => new ApiError(409, message),
+  passwordChangeRequired: () =>
+    new ApiError(403, "Choisissez un nouveau mot de passe avant de continuer.", undefined, "PASSWORD_CHANGE_REQUIRED"),
+  tooManyRequests: (retryAfterSeconds: number) =>
+    new ApiError(429, "Trop de tentatives. Réessayez dans quelques instants.", { retryAfter: retryAfterSeconds }, "RATE_LIMITED"),
 };

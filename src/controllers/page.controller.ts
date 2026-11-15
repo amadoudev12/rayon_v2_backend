@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import * as dashboardService from "@/services/dashboard";
 import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
 import { saleSummarySelect, serializeSaleSummary } from "@/lib/serializers/sale";
+import { pricingLimitsFor } from "@/services/pricing-policy";
+import { archiveFilter } from "@/services/party";
 import { PaymentMethod, SaleStatus, StockMovementType } from "@/generated/prisma/enums";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -294,7 +296,7 @@ export async function getNewSalePage(req: Request, res: Response) {
   const storeId = await getActiveStoreId(context);
   const quoteId = Number(searchParams(req).get("devis")) || null;
 
-  const [products, customers, organization, quote] = await Promise.all([
+  const [products, customers, organization, quote, pricing] = await Promise.all([
     prisma.produit.findMany({
       where: { organisationId: context.organizationId, actif: true },
       select: {
@@ -307,7 +309,7 @@ export async function getNewSalePage(req: Request, res: Response) {
       orderBy: { nom: "asc" },
     }),
     prisma.client.findMany({
-      where: { organisationId: context.organizationId },
+      where: { organisationId: context.organizationId, archive: false },
       select: { id: true, nom: true },
       orderBy: { nom: "asc" },
     }),
@@ -324,6 +326,7 @@ export async function getNewSalePage(req: Request, res: Response) {
           },
         })
       : null,
+    pricingLimitsFor(context),
   ]);
 
   const catalog = products.map(({ stocks, ...product }) => ({
@@ -336,6 +339,8 @@ export async function getNewSalePage(req: Request, res: Response) {
     products: catalog,
     customers,
     currency: organization.devise,
+    /** Plafond de remise du rôle (null : sans limite) et droit de vendre sous le coût. */
+    pricing,
     quote: quote && {
       ...quote,
       remise: Number(quote.remise),
@@ -492,7 +497,7 @@ export async function getPurchasesPage(req: Request, res: Response) {
       orderBy: { nom: "asc" },
     }),
     prisma.fournisseur.findMany({
-      where: { organisationId: context.organizationId },
+      where: { organisationId: context.organizationId, archive: false },
       select: { id: true, nom: true },
       orderBy: { nom: "asc" },
     }),
@@ -523,6 +528,7 @@ export async function getCustomersPage(req: Request, res: Response) {
 
   const where = {
     organisationId: context.organizationId,
+    ...archiveFilter(params),
     ...(search ? { OR: [{ nom: containsText(search) }, { telephone: containsText(search) }] } : {}),
   };
 
@@ -540,6 +546,8 @@ export async function getCustomersPage(req: Request, res: Response) {
   return jsonData(res, {
     customers,
     canManage,
+    canDelete: can(context.role, "customer:delete"),
+    showArchived: params.get("archives") === "true",
     page: pagination.page,
     totalPages: paginationMeta(pagination, total).totalPages,
     total,
@@ -555,6 +563,7 @@ export async function getSuppliersPage(req: Request, res: Response) {
 
   const where = {
     organisationId: context.organizationId,
+    ...archiveFilter(params),
     ...(search ? { OR: [{ nom: containsText(search) }, { telephone: containsText(search) }] } : {}),
   };
 
@@ -571,6 +580,8 @@ export async function getSuppliersPage(req: Request, res: Response) {
 
   return jsonData(res, {
     suppliers,
+    canDelete: can(context.role, "supplier:delete"),
+    showArchived: params.get("archives") === "true",
     page: pagination.page,
     totalPages: paginationMeta(pagination, total).totalPages,
     total,

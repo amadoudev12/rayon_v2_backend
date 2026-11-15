@@ -5,6 +5,7 @@ import { customerSchema } from "@/lib/validations/customer";
 import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
 import { getPagination, paginationMeta } from "@/lib/api/pagination";
 import { Errors } from "@/lib/api/errors";
+import { archiveFilter, removeCustomer, restoreCustomer } from "@/services/party";
 
 export async function getAllCustomers(req: Request, res: Response) {
   const context = req.user;
@@ -14,6 +15,7 @@ export async function getAllCustomers(req: Request, res: Response) {
 
   const where = {
     organisationId: context.organizationId,
+    ...archiveFilter(params),
     ...(search ? { OR: [{ nom: containsText(search) }, { telephone: containsText(search) }] } : {}),
   };
 
@@ -69,15 +71,15 @@ export async function updateCustomer(req: Request, res: Response) {
   return jsonData(res, customer);
 }
 
+/** Supprime un client sans historique ; l'archive sinon (historique conservé). */
 export async function deleteCustomer(req: Request, res: Response) {
-  const context = req.user;
-
-  const customerId = routeId(req);
-
-  const deleted = await prisma.client.deleteMany({
-    where: { id: customerId, organisationId: context.organizationId },
+  const result = await removeCustomer(req.user, routeId(req));
+  return jsonData(res, result, {
+    status: 200,
   });
-  if (deleted.count === 0) throw Errors.notFound("Client introuvable");
+}
 
-  return jsonMessage(res, "Client supprimé");
+export async function restoreCustomerHandler(req: Request, res: Response) {
+  await restoreCustomer(req.user, routeId(req));
+  return jsonMessage(res, "Client restauré");
 }

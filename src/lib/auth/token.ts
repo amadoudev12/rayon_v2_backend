@@ -1,7 +1,8 @@
 import type { CookieOptions, Response } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import { prisma } from "@/lib/prisma";
-import { currentRequest } from "@/lib/http/context";
+import { currentRequest, requestCache } from "@/lib/http/context";
+import { randomUUID } from "node:crypto";
 import type { Role } from "@/generated/prisma/enums";
 
 /**
@@ -41,6 +42,9 @@ export type SessionTenant = {
 /** Session portée par la requête, telle que le jeton la décrit (photo prise à la connexion). */
 export type Session = {
   expires: string;
+  /** Session en base liée au jeton (absente dans les tests qui simulent la session). */
+  sessionId?: string;
+  audience?: Audience;
   user: { id: number; name?: string | null; tenant: SessionTenant };
   /** Date d'émission du jeton, pour prolonger la session web d'un compte actif. */
   issuedAt?: Date;
@@ -78,12 +82,43 @@ export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
  * Destinataire du jeton : un jeton mobile n'est pas un cookie de session
  * valide, et inversement.
  */
-type Audience = "web" | "mobile";
+export type Audience = "web" | "mobile";
 
-/** Émet le jeton de session d'un compte dont les identifiants viennent d'être vérifiés. */
-export async function issueSessionToken(user: { id: number; prenom: string; nom: string }, audience: Audience) {
+/**
+ * Émet le jeton de session d'un compte dont les identifiants viennent d'être
+ * vérifiés. Chaque jeton est lié à une ligne `SessionUtilisateur` : la
+ * révoquer (déconnexion, changement de mot de passe, retrait du membre…)
+ * invalide le jeton dès la requête suivante, même s'il n'a pas expiré.
+ *
+ * `sessionId` : prolonge une session existante (renouvellement du cookie).
+ */
+export async function issueSessionToken(user: { id: number; prenom: string; nom: string }, audience: Audience, sessionId?: string) {
+  const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000);
+  let sid = sessionId;
+  if (sid) {
+    const extended = await prisma.sessionUtilisateur.updateMany({
+      where: { id: sid, utilisateurId: user.id, audience, revoqueLe: null },
+      data: { expireLe: expiresAt },
+    });
+    if (extended.count !== 1) throw new Error("Session introuvable ou révoquée : renouvellement impossible.");
+  } else {
+    sid = randomUUID();
+    const req = currentRequest();
+    await prisma.sessionUtilisateur.create({
+      data: {
+        id: sid,
+        audience,
+        expireLe: expiresAt,
+        utilisateurId: user.id,
+        adresseIp: req ? (req.ip ?? null) : null,
+        agentUtilisateur: req?.get("user-agent")?.slice(0, 300) ?? null,
+      },
+    });
+  }
+
   const token = await new SignJWT({
     id: user.id,
+    sid,
     name: `${user.prenom} ${user.nom}`,
     tenant: await loadMembership(user.id),
     superAdmin: await loadIsSuperAdmin(user.id),
@@ -95,10 +130,34 @@ export async function issueSessionToken(user: { id: number; prenom: string; nom:
     .setExpirationTime(`${SESSION_MAX_AGE_SECONDS}s`)
     .sign(requireSecret());
 
-  return { token, expiresAt: new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000) };
+  return { token, expiresAt, sessionId: sid };
 }
 
-/** Lit un jeton ; null s'il est falsifié, tronqué, expiré ou destiné à l'autre client. */
+/** Écart minimal entre deux mises à jour de `derniereUtilisation` d'une session. */
+const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Session active en base pour ce jeton : non révoquée, non expirée, du même
+ * compte et du même client (site / mobile). Lue une fois par requête.
+ */
+const loadActiveSession = requestCache(async (sessionId: string, userId: number, audience: Audience) => {
+  const session = await prisma.sessionUtilisateur.findUnique({
+    where: { id: sessionId },
+    select: { utilisateurId: true, audience: true, revoqueLe: true, expireLe: true, derniereUtilisation: true },
+  });
+  if (!session || session.utilisateurId !== userId || session.audience !== audience) return false;
+  if (session.revoqueLe || session.expireLe.getTime() <= Date.now()) return false;
+  if (Date.now() - session.derniereUtilisation.getTime() > SESSION_TOUCH_INTERVAL_MS) {
+    await prisma.sessionUtilisateur.updateMany({ where: { id: sessionId }, data: { derniereUtilisation: new Date() } }).catch(() => undefined);
+  }
+  return true;
+});
+
+/**
+ * Lit un jeton ; null s'il est falsifié, tronqué, expiré, destiné à l'autre
+ * client, sans session (jeton émis avant les sessions révocables) ou si sa
+ * session a été révoquée.
+ */
 export async function readSessionToken(token: string, audience: Audience): Promise<Session | null> {
   if (!getAuthSecret()) return null;
 
@@ -108,11 +167,14 @@ export async function readSessionToken(token: string, audience: Audience): Promi
   } catch {
     return null;
   }
-  if (typeof payload.id !== "number") return null;
+  if (typeof payload.id !== "number" || typeof payload.sid !== "string") return null;
+  if (!(await loadActiveSession(payload.sid, payload.id, audience))) return null;
 
   const expiresAt = typeof payload.exp === "number" ? payload.exp * 1000 : Date.now();
   return {
     expires: new Date(expiresAt).toISOString(),
+    sessionId: payload.sid,
+    audience,
     user: {
       id: payload.id,
       name: typeof payload.name === "string" ? payload.name : null,
@@ -120,6 +182,20 @@ export async function readSessionToken(token: string, audience: Audience): Promi
     },
     issuedAt: typeof payload.iat === "number" ? new Date(payload.iat * 1000) : undefined,
   };
+}
+
+/** Révoque une session (déconnexion). */
+export async function revokeSession(sessionId: string, motif: string) {
+  await prisma.sessionUtilisateur.updateMany({ where: { id: sessionId, revoqueLe: null }, data: { revoqueLe: new Date(), motifRevocation: motif } });
+}
+
+/** Révoque toutes les sessions d'un compte, sauf éventuellement la session courante. */
+export async function revokeUserSessions(userId: number, motif: string, exceptSessionId?: string) {
+  const result = await prisma.sessionUtilisateur.updateMany({
+    where: { utilisateurId: userId, revoqueLe: null, ...(exceptSessionId ? { id: { not: exceptSessionId } } : {}) },
+    data: { revoqueLe: new Date(), motifRevocation: motif },
+  });
+  return result.count;
 }
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,11 @@ export const PERMISSIONS = {
   "stock-movement:read": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
   "purchase:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
   "supplier:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
+  /** Suppression ou archivage d'un fournisseur (dettes comprises). */
+  "supplier:delete": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "customer:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.SELLER],
+  /** Suppression ou archivage d'un client (créances comprises). */
+  "customer:delete": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "sale:create": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.SELLER],
   "sale:cancel": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "refund:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER],
