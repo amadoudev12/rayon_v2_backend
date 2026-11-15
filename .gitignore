@@ -7,3 +7,8 @@ node_modules/
 *.tsbuildinfo
 .DS_Store
 npm-debug.log*
+
+# Sauvegardes de base : jamais dans le dépôt
+backups/
+*.dump
+*.dump.sha256

@@ -13,7 +13,10 @@ function createPrismaClient() {
     );
   }
 
-  const adapter = new PrismaPg({ connectionString: databaseUrl });
+  // Taille du pool de connexions (10 par défaut dans pg) : à ajuster selon le
+  // nombre d'instances et la limite du serveur (ou du pooler) PostgreSQL.
+  const max = Number(process.env.DATABASE_POOL_MAX) || 10;
+  const adapter = new PrismaPg({ connectionString: databaseUrl, max });
   return new PrismaClient({ adapter });
 }
 

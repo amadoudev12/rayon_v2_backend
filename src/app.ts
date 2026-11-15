@@ -3,6 +3,8 @@ import cors from "cors";
 import express from "express";
 import { allowedOrigins, trustProxyHops } from "@/env";
 import { requestContext } from "@/lib/http/context";
+import { log, requestLogger } from "@/lib/logger";
+import { prisma } from "@/lib/prisma";
 import { errorHandler } from "@/middleware/errorHandler";
 import { securityHeaders, verifyOrigin } from "@/middleware/security";
 import adminRoutes from "@/routes/admin.routes";
@@ -36,10 +38,23 @@ export function createApp() {
   app.use(cookieParser());
   app.use(express.json({ limit: "1mb" }));
   app.use(requestContext);
+  app.use(requestLogger);
   app.use(verifyOrigin);
 
+  // Vivacité : le processus répond (pour le redémarrage automatique).
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
+  });
+  // Disponibilité : la base répond aussi (pour la supervision et le répartiteur de charge).
+  app.get("/health/ready", async (_req, res) => {
+    const started = Date.now();
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      res.json({ status: "ok", database: "ok", latencyMs: Date.now() - started });
+    } catch {
+      log("error", "health.database_unreachable");
+      res.status(503).json({ status: "degraded", database: "unreachable" });
+    }
   });
 
   // Routes

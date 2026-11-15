@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
 import { Prisma } from "@/generated/prisma/client";
 import { ApiError, PageRedirect } from "@/lib/api/errors";
+import { log } from "@/lib/logger";
 
 /**
  * Middleware d'erreur Express : dernière étape de toutes les routes.
@@ -12,12 +13,12 @@ import { ApiError, PageRedirect } from "@/lib/api/errors";
  * HTTP est donc faite à un seul endroit : erreurs zod -> 400, `ApiError` ->
  * son statut, erreur inconnue -> 500 (journalisée, jamais envoyée au client).
  */
-export function errorHandler(error: unknown, _req: Request, res: Response, next: NextFunction) {
+export function errorHandler(error: unknown, req: Request, res: Response, next: NextFunction) {
   if (res.headersSent) return next(error);
-  handleApiError(error, res);
+  handleApiError(error, res, req);
 }
 
-export function handleApiError(error: unknown, res: Response) {
+export function handleApiError(error: unknown, res: Response, req?: Request) {
   if (error instanceof ApiError) {
     if (error.code === "RATE_LIMITED") {
       const retryAfter = (error.details as { retryAfter?: number } | undefined)?.retryAfter;
@@ -57,6 +58,14 @@ export function handleApiError(error: unknown, res: Response) {
     return res.status(400).json({ message: "Données invalides" });
   }
 
-  console.error(error);
-  return res.status(500).json({ message: "Une erreur interne est survenue." });
+  // Erreur inattendue : journalisée avec l'identifiant de requête, jamais renvoyée au client.
+  log("error", "http.unhandled_error", {
+    requestId: req?.requestId ?? null,
+    path: req?.originalUrl.split("?")[0] ?? null,
+    error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
+  });
+  return res.status(500).json({
+    message: "Une erreur interne est survenue.",
+    ...(req?.requestId ? { requestId: req.requestId } : {}),
+  });
 }

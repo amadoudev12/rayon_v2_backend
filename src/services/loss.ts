@@ -74,8 +74,8 @@ export async function cancelLoss(context: AuthContext, id: number, motif: string
   });
 }
 
-export function listLosses(context: AuthContext, boutiqueId?: number) {
-  return prisma.perteStock.findMany({ where: { organisationId: context.organizationId, ...(context.membershipStoreId ? { boutiqueId: context.membershipStoreId } : boutiqueId ? { boutiqueId } : {}) }, include: { produit: { select: { id: true, nom: true, unite: true } }, boutique: { select: { nom: true } }, declarePar: { select: { prenom: true, nom: true } } }, orderBy: { creeLe: "desc" } }).then((losses) => losses.map((loss) => ({ ...loss, canCancel: can(context.role, "loss:cancel") })));
+export function listLosses(context: AuthContext, boutiqueId?: number, page = 1, limit = 100) {
+  return prisma.perteStock.findMany({ skip: (page - 1) * limit, take: limit, where: { organisationId: context.organizationId, ...(context.membershipStoreId ? { boutiqueId: context.membershipStoreId } : boutiqueId ? { boutiqueId } : {}) }, include: { produit: { select: { id: true, nom: true, unite: true } }, boutique: { select: { nom: true } }, declarePar: { select: { prenom: true, nom: true } } }, orderBy: { creeLe: "desc" } }).then((losses) => losses.map((loss) => ({ ...loss, canCancel: can(context.role, "loss:cancel") })));
 }
 
 export async function getLossReport(context: AuthContext, options: { boutiqueId?: number; from?: Date; to?: Date } = {}) {

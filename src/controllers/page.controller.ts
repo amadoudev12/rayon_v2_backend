@@ -4,6 +4,7 @@ import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
 import { saleSummarySelect, serializeSaleSummary } from "@/lib/serializers/sale";
 import { pricingLimitsFor } from "@/services/pricing-policy";
 import { archiveFilter } from "@/services/party";
+import { listStoreStock } from "@/services/stock-query";
 import { PaymentMethod, SaleStatus, StockMovementType } from "@/generated/prisma/enums";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -151,35 +152,13 @@ export async function getStockPage(req: Request, res: Response) {
   const lowStockOnly = params.get("lowStock") === "true";
   const pagination = getPagination(params, 20);
 
-  const where = {
-    boutiqueId: storeId,
-    produit: {
-      organisationId: context.organizationId,
-      actif: true,
-      ...(search ? { nom: containsText(search) } : {}),
-    },
-  };
-
-  const [stocksRaw, total, organization, thresholds] = await Promise.all([
-    prisma.stock.findMany({
-      where,
-      include: { produit: { select: { id: true, nom: true, unite: true, seuilAlerte: true, prixVente: true } } },
-      orderBy: { quantite: "asc" },
-    }),
-    prisma.stock.count({ where }),
+  const [{ rows, total: effectiveTotal }, organization] = await Promise.all([
+    listStoreStock({ organisationId: context.organizationId, storeId, search, lowStockOnly, page: pagination.page, limit: pagination.limit }),
     prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
-    prisma.seuilStockBoutique.findMany({ where: { organisationId: context.organizationId, boutiqueId: storeId } }),
   ]);
-  const thresholdByProduct = new Map(thresholds.map((row) => [row.produitId, row.seuilAlerte]));
-  const withThresholds = stocksRaw.map((stock) => ({ ...stock, produit: { ...stock.produit, seuilAlerte: thresholdByProduct.get(stock.produitId) ?? stock.produit.seuilAlerte } }));
-  const filtered = lowStockOnly ? withThresholds.filter((s) => s.quantite <= s.produit.seuilAlerte) : withThresholds;
-  const pageItems = filtered
-    .slice((pagination.page - 1) * pagination.limit, pagination.page * pagination.limit)
-    .map((stock) => ({ ...stock, produit: { ...stock.produit, prixVente: Number(stock.produit.prixVente) } }));
-  const effectiveTotal = lowStockOnly ? filtered.length : total;
 
   return jsonData(res, {
-    stocks: pageItems,
+    stocks: rows,
     canAdjust,
     canViewMovements: can(context.role, "stock-movement:read"),
     currency: organization.devise,

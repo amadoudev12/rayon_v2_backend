@@ -16,6 +16,9 @@ export type Period = {
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Durée maximale d'une période personnalisée (un an et un jour, années bissextiles comprises). */
+export const MAX_CUSTOM_PERIOD_DAYS = 366;
+
 /** « AAAA-MM-JJ » d'une date, dans le fuseau du serveur. */
 export function toDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -68,6 +71,9 @@ export function parsePeriod(params: URLSearchParams, now: Date = new Date(), tim
       const to = params.get("au") ? parseDateKey(params.get("au")!) : from;
       if (!from || !to) throw new ApiError(400, "Dates de la période invalides.");
       if (to < from) throw new ApiError(400, "La date de fin doit être postérieure à la date de début.");
+      if (addDateKeyDays(from, MAX_CUSTOM_PERIOD_DAYS) <= to) {
+        throw new ApiError(400, `Une période personnalisée est limitée à ${MAX_CUSTOM_PERIOD_DAYS} jours.`);
+      }
       return build(key, from, addDateKeyDays(to, 1), timeZone);
     }
     default:
