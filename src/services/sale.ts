@@ -5,7 +5,7 @@ import { CancellationKind, PaymentMethod, RefundStatus, SaleStatus, StockMovemen
 import { Prisma } from "@/generated/prisma/client";
 import { sumDecimals } from "@/lib/money";
 import { runTransaction, type Tx } from "@/lib/transactions";
-import { dateKeyAt } from "@/lib/timezone";
+import { addDateKeyDays, dateKeyAt, startOfDateKey } from "@/lib/timezone";
 import { recordAuditLog } from "@/lib/api/audit";
 import type { AuthContext } from "@/lib/auth/session";
 import type { SaleFormData } from "@/lib/validations/sale";
@@ -160,6 +160,18 @@ export async function createSale(
     throw Errors.conflict("Sélectionnez le client pour une vente à crédit.");
   }
 
+  if (data.dateEcheance && data.modePaiement !== PaymentMethod.CREDIT) {
+    throw Errors.conflict("Une échéance ne concerne qu'une vente à crédit.");
+  }
+  // Échéance = fin de la journée indiquée, dans le fuseau de l'organisation.
+  let dueDate: Date | null = null;
+  if (data.dateEcheance) {
+    const organization = await prisma.organisation.findUniqueOrThrow({ where: { id: organizationId }, select: { fuseauHoraire: true } });
+    const today = dateKeyAt(new Date(), organization.fuseauHoraire);
+    if (data.dateEcheance < today) throw Errors.conflict("L'échéance ne peut pas être dans le passé.");
+    dueDate = new Date(startOfDateKey(addDateKeyDays(data.dateEcheance, 1), organization.fuseauHoraire).getTime() - 1);
+  }
+
   if (data.clientId) {
     const customer = await prisma.client.findFirst({
       where: { id: data.clientId, organisationId: organizationId, archive: false },
@@ -229,6 +241,7 @@ export async function createSale(
           montantPaye,
           resteAPayer: total.minus(montantPaye),
           note: data.note || null,
+          dateEcheance: dueDate,
           cleIdempotence: idempotencyKey,
           empreinteIdempotence: fingerprint,
           lignes: {

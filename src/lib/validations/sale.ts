@@ -23,6 +23,12 @@ export const saleSchema = z.object({
   note: z.string().trim().max(1000).optional().or(z.literal("")),
   /** Devis transformé en cette vente. */
   devisId: z.coerce.number().int().positive().optional().nullable(),
+  /** Vente à crédit : date à laquelle le client s'engage à solder (« AAAA-MM-JJ »). */
+  dateEcheance: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Date d'échéance invalide (AAAA-MM-JJ).")
+    .optional()
+    .nullable(),
 });
 
 export type SaleFormData = z.infer<typeof saleSchema>;

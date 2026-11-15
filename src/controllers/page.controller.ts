@@ -5,6 +5,7 @@ import { saleSummarySelect, serializeSaleSummary } from "@/lib/serializers/sale"
 import { pricingLimitsFor } from "@/services/pricing-policy";
 import { archiveFilter } from "@/services/party";
 import { listStoreStock } from "@/services/stock-query";
+import { getSubscriptionAccess } from "@/services/subscription";
 import { PaymentMethod, SaleStatus, StockMovementType } from "@/generated/prisma/enums";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -70,6 +71,7 @@ export async function getShellPage(req: Request, res: Response) {
     organization,
     role: context.role,
     stores,
+    subscription: await getSubscriptionAccess(context.organizationId),
     // Null quand le membre est limité à une seule boutique (pas de sélecteur).
     activeStoreId: context.membershipStoreId ? null : activeStoreId,
   });
@@ -352,7 +354,13 @@ export async function getCreditsPage(req: Request, res: Response) {
   const where = {
     ...credits,
     AND: [
-      status === "reglee" ? { resteAPayer: 0 } : status === "toutes" ? {} : unpaid,
+      status === "reglee"
+        ? { resteAPayer: 0 }
+        : status === "toutes"
+          ? {}
+          : status === "en_retard"
+            ? { ...unpaid, dateEcheance: { lt: new Date() } }
+            : unpaid,
       search ? { client: { nom: containsText(search) } } : {},
     ],
   };
@@ -369,6 +377,7 @@ export async function getCreditsPage(req: Request, res: Response) {
         montantPaye: true,
         montantRetourne: true,
         resteAPayer: true,
+        dateEcheance: true,
         creeLe: true,
         client: { select: { id: true, nom: true, telephone: true } },
         paiements: { orderBy: { date: "desc" }, take: 1, select: { date: true } },
@@ -387,6 +396,7 @@ export async function getCreditsPage(req: Request, res: Response) {
       montantRetourne: Number(sale.montantRetourne),
       resteAPayer: Number(sale.resteAPayer),
       dernierPaiement: paiements[0]?.date ?? null,
+      enRetard: sale.dateEcheance !== null && sale.dateEcheance < new Date() && Number(sale.resteAPayer) > 0,
     })),
     summary: {
       outstanding: Number(outstanding._sum.resteAPayer ?? 0),

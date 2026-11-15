@@ -12,6 +12,7 @@ import {
   updateUserStatus,
   updateProfile,
 } from "@/controllers/admin.controller";
+import { getOrganizationSubscription, postSubscriptionPayment, putOrganizationSubscription } from "@/controllers/subscription.controller";
 
 /** Routes de la plateforme (`/api/admin/**`) : toutes réservées au super administrateur. */
 const router = Router();
@@ -23,6 +24,10 @@ router.get("/organizations", requireSuperAdmin, getAllOrganizations);
 router.post("/organizations", requireSuperAdmin, createOrganization);
 router.get("/organizations/:id", requireSuperAdmin, getOrganizationById);
 router.patch("/organizations/:id", requireSuperAdmin, updateOrganizationStatus);
+// Abonnements : saisie et paiements reçus hors ligne (aucun prestataire intégré).
+router.get("/organizations/:id/subscription", requireSuperAdmin, getOrganizationSubscription);
+router.put("/organizations/:id/subscription", requireSuperAdmin, putOrganizationSubscription);
+router.post("/organizations/:id/subscription/payments", requireSuperAdmin, postSubscriptionPayment);
 router.get("/users", requireSuperAdmin, getAllUsers);
 router.patch("/users/:id", requireSuperAdmin, updateUserStatus);
 router.patch("/profile", requireSuperAdmin, updateProfile);

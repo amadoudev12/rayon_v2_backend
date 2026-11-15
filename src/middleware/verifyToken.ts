@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { requireAuthContext, requirePageAuthContext, requireUserId } from "@/lib/auth/session";
+import { assertCanWrite } from "@/services/subscription";
 
 /**
  * Authentification des routes de l'API : vérifie la session (cookie du site
@@ -11,8 +12,12 @@ import { requireAuthContext, requirePageAuthContext, requireUserId } from "@/lib
  */
 export async function verifyToken(req: Request, _res: Response, next: NextFunction) {
   req.user = await requireAuthContext();
+  // Abonnement inactif (si le contrôle est activé) : lecture seule.
+  if (!READ_METHODS.has(req.method)) await assertCanWrite(req.user.organizationId);
   next();
 }
+
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
  * Même contrôle pour les lectures de page (`/api/pages/**`) : au lieu d'une

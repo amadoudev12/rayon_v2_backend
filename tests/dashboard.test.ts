@@ -9,8 +9,10 @@ beforeEach(resetDatabase);
 /** Début du mois courant et date située à coup sûr dans la « même période » du mois précédent. */
 function periods() {
   const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  // En UTC : le fuseau des organisations de test (Africa/Dakar, UTC+0), et non
+  // celui de la machine, pour que le test ne dépende pas de l'heure locale.
+  const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const startOfPreviousMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   const elapsed = now.getTime() - startOfMonth.getTime();
   return { insidePreviousPeriod: new Date(startOfPreviousMonth.getTime() + elapsed / 2) };
 }

@@ -25,6 +25,7 @@ import inventoryRoutes from "@/routes/inventory.routes";
 import lossRoutes from "@/routes/loss.routes";
 import storeRoutes from "@/routes/store.routes";
 import supplierRoutes from "@/routes/supplier.routes";
+import exportRoutes from "@/routes/export.routes";
 
 export function createApp() {
   const app = express();
@@ -77,6 +78,7 @@ export function createApp() {
   app.use("/api/customers", customerRoutes);
   app.use("/api/suppliers", supplierRoutes);
   app.use("/api/expenses", expenseRoutes);
+  app.use("/api/exports", exportRoutes);
 
   app.use((_req, res) => {
     res.status(404).json({ message: "Ressource introuvable" });

@@ -327,9 +327,11 @@ describe("coût historique, marge brute et bénéfice", () => {
     const client = await createClient(shop);
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixAchat: 600, prixVente: 1_000, stock: 50 });
 
+    // Dates construites en UTC, le fuseau des périodes de ce test (parsePeriod
+    // sans fuseau) : le test ne dépend plus de l'heure ni du fuseau de la machine.
     const now = new Date();
-    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12);
-    const longAgo = new Date(now.getFullYear(), now.getMonth() - 2, 15, 12);
+    const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 12));
+    const longAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 15, 12));
 
     const oldSale = await sell(shop, produit.id, 5, { credit: { clientId: client.id, montantPaye: 1_000 } });
     await backdateSale(oldSale.id, longAgo);
@@ -362,7 +364,7 @@ describe("coût historique, marge brute et bénéfice", () => {
 });
 
 function toKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return date.toISOString().slice(0, 10);
 }
 
 describe("parsePeriod — périodes de statistiques", () => {

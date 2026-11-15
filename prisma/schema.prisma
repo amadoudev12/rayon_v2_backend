@@ -36,6 +36,27 @@ enum StockMovementType {
   PURCHASE_CANCELLATION
 }
 
+/// État d'un abonnement SaaS.
+enum SubscriptionStatus {
+  /// Période d'essai gratuite.
+  TRIAL
+  /// Payé, période en cours.
+  ACTIVE
+  /// Échéance dépassée, paiement attendu (délai de grâce).
+  PAST_DUE
+  /// Accès suspendu (lecture seule) faute de paiement ou par l'administration.
+  SUSPENDED
+  /// Résilié à la demande du client.
+  CANCELLED
+}
+
+enum SubscriptionPaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
 /// Nature d'une annulation de vente.
 enum CancellationKind {
   /// L'argent encaissé doit être rendu : une obligation de remboursement est créée.
@@ -182,6 +203,7 @@ model Organisation {
   pertesStock   PerteStock[]
   seuilsStock   SeuilStockBoutique[]
   retoursVente  RetourVente[]
+  abonnement    Abonnement?
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
@@ -553,9 +575,12 @@ model Vente {
   cleAnnulation        String?
   cleIdempotence       String?
   empreinteIdempotence String?
+  /// Vente à crédit : date à laquelle le client s'est engagé à solder.
+  dateEcheance         DateTime?
 
   @@unique([organisationId, cleIdempotence])
   @@index([organisationId, boutiqueId, creeLe])
+  @@index([organisationId, boutiqueId, dateEcheance])
   @@index([clientId])
   @@index([organisationId, boutiqueId, resteAPayer])
   // Statistiques de la plateforme (toutes organisations confondues).
@@ -953,4 +978,56 @@ model CompteurLimite {
   modifieLe    DateTime  @default(now())
 
   @@index([modifieLe])
+}
+
+// ---------------------------------------------------------------------------
+// Abonnements SaaS (fondations : aucun prestataire de paiement intégré)
+// ---------------------------------------------------------------------------
+
+/// Abonnement d'une organisation. Absent : organisation non soumise aux
+/// abonnements (comptes historiques, tant que la facturation n'est pas activée).
+model Abonnement {
+  id               Int                @id @default(autoincrement())
+  /// Code de l'offre (ex : "essentiel", "pro").
+  plan             String
+  statut           SubscriptionStatus @default(TRIAL)
+  essaiFinLe       DateTime?
+  periodeDebut     DateTime
+  periodeFin       DateTime
+  annuleLe         DateTime?
+  /// Prestataire de paiement retenu (ex : "wave", "orange_money", "cinetpay").
+  fournisseur      String?
+  /// Identifiant de l'abonnement ou du client chez le prestataire.
+  referenceExterne String?
+
+  organisationId Int                  @unique
+  organisation   Organisation         @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  paiements      PaiementAbonnement[]
+
+  creeLe    DateTime @default(now())
+  modifieLe DateTime @updatedAt
+}
+
+/// Paiement d'abonnement notifié par un prestataire. L'unicité
+/// (fournisseur, référence) rend le traitement des notifications idempotent.
+model PaiementAbonnement {
+  id               Int                       @id @default(autoincrement())
+  montant          Decimal                   @db.Decimal(12, 2)
+  devise           String
+  statut           SubscriptionPaymentStatus @default(PENDING)
+  fournisseur      String
+  referenceExterne String
+  /// Période couverte par ce paiement.
+  periodeDebut     DateTime
+  periodeFin       DateTime
+  payeLe           DateTime?
+  metadonnees      Json?
+
+  abonnementId Int
+  abonnement   Abonnement @relation(fields: [abonnementId], references: [id], onDelete: Restrict)
+
+  creeLe DateTime @default(now())
+
+  @@unique([fournisseur, referenceExterne])
+  @@index([abonnementId, creeLe])
 }

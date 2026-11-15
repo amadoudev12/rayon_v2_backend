@@ -133,8 +133,10 @@ export async function getFinancialSummary(scope: FinanceScope, period: FinancePe
         SELECT "remboursementVenteId", SUM("montant") AS amount FROM "VersementRemboursement" GROUP BY "remboursementVenteId"
       ) paid ON paid."remboursementVenteId" = r."id"
       WHERE v."organisationId" = ${organisationId} ${store("v")} AND r."statut" <> 'COMPLETED'`,
-    prisma.$queryRaw<{ count: bigint; amount: Prisma.Decimal | null }[]>`
-      SELECT COUNT(*) AS count, SUM(v."resteAPayer") AS amount
+    prisma.$queryRaw<{ count: bigint; amount: Prisma.Decimal | null; overdue_count: bigint; overdue_amount: Prisma.Decimal | null }[]>`
+      SELECT COUNT(*) AS count, SUM(v."resteAPayer") AS amount,
+             COUNT(*) FILTER (WHERE v."dateEcheance" < NOW()) AS overdue_count,
+             SUM(v."resteAPayer") FILTER (WHERE v."dateEcheance" < NOW()) AS overdue_amount
       FROM "Vente" v
       WHERE v."organisationId" = ${organisationId} ${store("v")}
         AND v."statut" = 'COMPLETED' AND v."resteAPayer" > 0`,
@@ -207,6 +209,9 @@ export async function getFinancialSummary(scope: FinanceScope, period: FinancePe
     pendingRefundCount: Number(pendingRows[0]?.count ?? 0),
     outstanding: toNumber(outstandingRows[0]?.amount ?? zero),
     outstandingCount: Number(outstandingRows[0]?.count ?? 0),
+    /** Créances dont l'échéance est dépassée. */
+    overdue: toNumber(outstandingRows[0]?.overdue_amount ?? zero),
+    overdueCount: Number(outstandingRows[0]?.overdue_count ?? 0),
     // Résultat
     costOfSales: toNumber(costOfSales),
     returnsCost: toNumber(returns.cost ?? zero),
