@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { LossStatus, StockMovementType } from "@/generated/prisma/enums";
+import { InventoryStatus, LossStatus, StockMovementType } from "@/generated/prisma/enums";
+import { runTransaction } from "@/lib/transactions";
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { Errors } from "@/lib/api/errors";
@@ -10,7 +11,7 @@ export async function createLoss(context: AuthContext, data: { boutiqueId: numbe
   if (context.membershipStoreId && context.membershipStoreId !== data.boutiqueId) throw Errors.forbidden("Cette boutique ne vous est pas accessible.");
   const fingerprint = createHash("sha256").update(JSON.stringify(data)).digest("hex");
   try {
-    return await prisma.$transaction(async (tx) => {
+    return await runTransaction(async (tx) => {
     const existing = await tx.perteStock.findUnique({ where: { organisationId_cleIdempotence: { organisationId: context.organizationId, cleIdempotence: key } } });
     if (existing) {
       if (existing.empreinteIdempotence !== fingerprint) throw Errors.conflict("Cette clé d'idempotence a déjà été utilisée avec d'autres données.");
@@ -27,7 +28,7 @@ export async function createLoss(context: AuthContext, data: { boutiqueId: numbe
     const loss = await tx.perteStock.create({ data: { reference: `PER-${randomUUID().slice(0, 8).toUpperCase()}`, organisationId: context.organizationId, boutiqueId: data.boutiqueId, produitId: data.produitId, quantite: data.quantite, motif: data.motif, description: data.description || null, coutUnitaire: product.prixAchat, cleIdempotence: key, empreinteIdempotence: fingerprint, declareParId: context.userId } });
     await tx.mouvementStock.create({ data: { boutiqueId: data.boutiqueId, produitId: data.produitId, utilisateurId: context.userId, type: StockMovementType.LOSS, variationQuantite: -data.quantite, quantiteAvant: after + data.quantite, quantiteApres: after, coutUnitaire: product.prixAchat, creeLe: new Date(), note: data.motif, sourceReference: loss.reference, perteStockId: loss.id } });
     return loss;
-    }, { isolationLevel: "Serializable" });
+    });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2002" || error.code === "P2034")) {
       const existing = await prisma.perteStock.findUnique({ where: { organisationId_cleIdempotence: { organisationId: context.organizationId, cleIdempotence: key } } });
@@ -40,11 +41,29 @@ export async function createLoss(context: AuthContext, data: { boutiqueId: numbe
   }
 }
 
+/**
+ * Annule une déclaration de perte et recrédite le stock. Refusé si un
+ * inventaire validé a compté ce produit APRÈS la perte : le comptage physique
+ * a déjà intégré la perte, la recréditer créerait du stock fantôme.
+ */
 export async function cancelLoss(context: AuthContext, id: number, motif: string) {
-  return prisma.$transaction(async (tx) => {
+  return runTransaction(async (tx) => {
     const loss = await tx.perteStock.findFirst({ where: { id, organisationId: context.organizationId, ...(context.membershipStoreId ? { boutiqueId: context.membershipStoreId } : {}) } });
     if (!loss) throw Errors.notFound("Déclaration de perte introuvable");
     if (loss.statut !== LossStatus.ACTIVE) throw Errors.conflict("Cette déclaration est déjà annulée.");
+    const countedAfter = await tx.ligneInventaire.findFirst({
+      where: {
+        produitId: loss.produitId,
+        compteLe: { gt: loss.creeLe },
+        inventaire: { boutiqueId: loss.boutiqueId, statut: InventoryStatus.VALIDATED },
+      },
+      select: { inventaire: { select: { reference: true } } },
+    });
+    if (countedAfter) {
+      throw Errors.conflict(
+        `L'inventaire ${countedAfter.inventaire.reference} a compté ce produit après la perte et a déjà corrigé le stock : l'annulation recréerait du stock qui n'existe pas.`,
+      );
+    }
     await tx.$executeRaw`INSERT INTO "Stock" ("boutiqueId", "produitId", "quantite", "modifieLe") VALUES (${loss.boutiqueId}, ${loss.produitId}, 0, NOW()) ON CONFLICT ("boutiqueId", "produitId") DO NOTHING`;
     const changed = await tx.$queryRaw<Array<{ quantite: number }>>`UPDATE "Stock" SET "quantite" = "quantite" + ${loss.quantite}, "modifieLe" = NOW() WHERE "boutiqueId" = ${loss.boutiqueId} AND "produitId" = ${loss.produitId} RETURNING "quantite"`;
     const after = changed[0]!.quantite;
@@ -52,7 +71,7 @@ export async function cancelLoss(context: AuthContext, id: number, motif: string
     if (!updated.count) throw Errors.conflict("Cette déclaration a été annulée par un autre utilisateur.");
     await tx.mouvementStock.create({ data: { boutiqueId: loss.boutiqueId, produitId: loss.produitId, utilisateurId: context.userId, type: StockMovementType.LOSS_CANCELLATION, variationQuantite: loss.quantite, quantiteAvant: after - loss.quantite, quantiteApres: after, coutUnitaire: loss.coutUnitaire, creeLe: new Date(), note: motif, sourceReference: loss.reference, perteStockId: loss.id } });
     return tx.perteStock.findUniqueOrThrow({ where: { id } });
-  }, { isolationLevel: "Serializable" });
+  });
 }
 
 export function listLosses(context: AuthContext, boutiqueId?: number) {

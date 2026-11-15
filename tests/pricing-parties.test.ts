@@ -179,7 +179,7 @@ describe("clients et fournisseurs protégés (F-05)", () => {
     expect((await request(app).delete(`/api/suppliers/${fournisseur.id}`)).status).toBe(403);
     await as(shop, Role.OWNER);
     expect((await request(app).delete(`/api/suppliers/${fournisseur.id}`)).body.data.mode).toBe("archived");
-    const purchase = await request(app).post("/api/purchases").send({ lignes: [{ produitId: produit.id, quantite: 1, coutUnitaire: 500 }], fournisseurId: fournisseur.id });
+    const purchase = await request(app).post("/api/purchases").set("Idempotency-Key", testKey()).send({ lignes: [{ produitId: produit.id, quantite: 1, coutUnitaire: 500 }], fournisseurId: fournisseur.id });
     expect(purchase.status).toBe(404);
   });
 });

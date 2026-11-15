@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tenderSchema } from "@/lib/validations/sale";
 
 export const purchaseItemSchema = z.object({
   produitId: z.coerce.number().int().positive("Produit invalide"),
@@ -7,12 +8,28 @@ export const purchaseItemSchema = z.object({
 });
 
 export const purchaseSchema = z.object({
-  lignes: z.array(purchaseItemSchema).min(1, "Ajoutez au moins un produit"),
+  lignes: z
+    .array(purchaseItemSchema)
+    .min(1, "Ajoutez au moins un produit")
+    .max(500, "Un achat est limité à 500 lignes.")
+    .refine((lines) => new Set(lines.map((line) => line.produitId)).size === lines.length, "Un même produit apparaît deux fois : regroupez les quantités."),
   fournisseurId: z.coerce.number().int().positive().optional().nullable(),
   boutiqueId: z.coerce.number().int().positive().optional().nullable(),
   /** Montant versé au fournisseur ; l'achat est payé en totalité s'il est absent. */
   montantPaye: z.coerce.number().nonnegative("Le montant payé doit être positif ou nul.").optional(),
-  note: z.string().trim().optional().or(z.literal("")),
+  /** Mode du paiement versé à la réception. */
+  modePaiement: tenderSchema.default("CASH"),
+  note: z.string().trim().max(1000).optional().or(z.literal("")),
 });
 
 export type PurchaseFormData = z.infer<typeof purchaseSchema>;
+export type PurchaseFormInput = z.input<typeof purchaseSchema>;
+
+export const supplierPaymentSchema = z.object({
+  montant: z.coerce.number().positive("Le montant doit être supérieur à 0."),
+  modePaiement: tenderSchema,
+});
+
+export const purchaseCancelSchema = z.object({
+  motif: z.string().trim().min(3, "Indiquez le motif (3 caractères au moins).").max(500),
+});

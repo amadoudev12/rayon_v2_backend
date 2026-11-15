@@ -24,6 +24,8 @@ export const PERMISSIONS = {
   "stock:report": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
   "stock-movement:read": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
   "purchase:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
+  /** Annulation d'un achat (contre-mouvements de stock). */
+  "purchase:cancel": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "supplier:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
   /** Suppression ou archivage d'un fournisseur (dettes comprises). */
   "supplier:delete": [Role.OWNER, Role.ADMIN, Role.MANAGER],

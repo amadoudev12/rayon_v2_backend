@@ -4,9 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { containsText } from "@/lib/search";
 import { requirePermission, resolveActiveStoreId } from "@/lib/auth/session";
 import { getActiveStoreId } from "@/lib/auth/store";
-import { productImportSchema, productSchema } from "@/lib/validations/product";
+import { productImportSchema, productSchema, productUpdateSchema } from "@/lib/validations/product";
 import { SaleStatus } from "@/generated/prisma/enums";
-import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
+import { jsonData, jsonPage, routeId, searchParams } from "@/lib/api/response";
 import { getPagination, getSort, paginationMeta } from "@/lib/api/pagination";
 import { Errors } from "@/lib/api/errors";
 import { can } from "@/lib/auth/permissions";
@@ -164,7 +164,7 @@ export async function updateProduct(req: Request, res: Response) {
 
   const productId = routeId(req);
 
-  const parsed = productSchema.parse(req.body);
+  const parsed = productUpdateSchema.parse(req.body);
   const product = await productService.updateProduct(context, productId, parsed);
 
   return jsonData(res, product);
@@ -175,6 +175,6 @@ export async function deleteProduct(req: Request, res: Response) {
 
   const productId = routeId(req);
 
-  await productService.deleteProduct(context, productId);
-  return jsonMessage(res, "Produit supprimé");
+  const result = await productService.deleteProduct(context, productId);
+  return jsonData(res, result);
 }

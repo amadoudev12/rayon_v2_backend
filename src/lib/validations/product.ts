@@ -15,6 +15,18 @@ export const productSchema = z.object({
 });
 
 export type ProductFormData = z.infer<typeof productSchema>;
+
+/**
+ * Modification d'un produit : tous les champs sont facultatifs ; un champ
+ * absent reste inchangé. Le stock ne se modifie jamais ici (ajustement ou
+ * inventaire), d'où l'absence de quantité initiale.
+ */
+export const productUpdateSchema = productSchema
+  .omit({ quantiteInitiale: true })
+  .partial()
+  .refine((value) => Object.values(value).some((field) => field !== undefined), "Aucune modification à enregistrer.");
+
+export type ProductUpdateData = z.infer<typeof productUpdateSchema>;
 /** Forme brute avant le `coerce` de zod : ce que contiennent réellement les champs de `useForm`. */
 export type ProductFormInput = z.input<typeof productSchema>;
 

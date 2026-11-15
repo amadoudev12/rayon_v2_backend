@@ -33,6 +33,7 @@ enum StockMovementType {
   LOSS
   LOSS_CANCELLATION
   SALE_RETURN
+  PURCHASE_CANCELLATION
 }
 
 /// Nature d'une annulation de vente.
@@ -124,6 +125,8 @@ model Utilisateur {
   journauxAudit            JournalAudit[]
   ventes                   Vente[]                  @relation("VenteVendeur")
   achats                   Achat[]                  @relation("AchatCreePar")
+  achatsAnnules            Achat[]                  @relation("AchatAnnulation")
+  paiementsFournisseur     PaiementFournisseur[]
   depenses                 Depense[]                @relation("DepenseCreePar")
   mouvementsStock          MouvementStock[]
   paiementsVente           PaiementVente[]
@@ -423,7 +426,7 @@ model MouvementStock {
   boutique   Boutique @relation(fields: [boutiqueId], references: [id], onDelete: Cascade)
 
   produitId Int
-  produit   Produit @relation(fields: [produitId], references: [id], onDelete: Cascade)
+  produit   Produit @relation(fields: [produitId], references: [id], onDelete: Restrict)
 
   utilisateurId Int
   utilisateur   Utilisateur @relation(fields: [utilisateurId], references: [id])
@@ -774,12 +777,23 @@ model LigneDevis {
 // ---------------------------------------------------------------------------
 
 model Achat {
-  id          Int            @id @default(autoincrement())
-  statut      PurchaseStatus @default(RECEIVED)
-  total       Decimal        @db.Decimal(12, 2)
-  /// Montant versé au fournisseur ; reste à payer = total − montantPaye.
-  montantPaye Decimal        @db.Decimal(12, 2)
-  note        String?
+  id                   Int            @id @default(autoincrement())
+  statut               PurchaseStatus @default(RECEIVED)
+  total                Decimal        @db.Decimal(12, 2)
+  /// Somme des paiements au fournisseur (`paiements`), tenue à jour dans la
+  /// même transaction que chaque paiement.
+  montantPaye          Decimal        @db.Decimal(12, 2)
+  /// Reste dû au fournisseur : total − payé ; 0 pour un achat annulé.
+  resteAPayer          Decimal        @default(0) @db.Decimal(12, 2)
+  note                 String?
+  /// Clé d'idempotence de la création : un achat rejoué n'est enregistré qu'une fois.
+  cleIdempotence       String?
+  empreinteIdempotence String?
+  annuleLe             DateTime?
+  annuleParId          Int?
+  annulePar            Utilisateur?   @relation("AchatAnnulation", fields: [annuleParId], references: [id], onDelete: SetNull)
+  motifAnnulation      String?
+  cleAnnulation        String?
 
   organisationId Int
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
@@ -795,10 +809,31 @@ model Achat {
 
   lignes          LigneAchat[]
   mouvementsStock MouvementStock[]
+  paiements       PaiementFournisseur[]
 
   creeLe DateTime @default(now())
 
+  @@unique([organisationId, cleIdempotence])
   @@index([organisationId, boutiqueId, creeLe])
+  @@index([organisationId, boutiqueId, resteAPayer])
+}
+
+/// Un versement au fournisseur sur un achat (paiement initial puis règlements).
+model PaiementFournisseur {
+  id             Int            @id @default(autoincrement())
+  montant        Decimal        @db.Decimal(12, 2)
+  /// Null pour les paiements historiques dont le mode n'est pas connu.
+  modePaiement   PaymentMethod?
+  date           DateTime       @default(now())
+  cleIdempotence String?
+
+  achatId       Int
+  achat         Achat        @relation(fields: [achatId], references: [id], onDelete: Restrict)
+  utilisateurId Int?
+  utilisateur   Utilisateur? @relation(fields: [utilisateurId], references: [id], onDelete: SetNull)
+
+  @@unique([achatId, cleIdempotence])
+  @@index([date])
 }
 
 model LigneAchat {

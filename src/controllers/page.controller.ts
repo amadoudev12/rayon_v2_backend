@@ -504,11 +504,13 @@ export async function getPurchasesPage(req: Request, res: Response) {
   ]);
 
   return jsonData(res, {
-    purchases: purchases.map((purchase) => ({
+    purchases: purchases.map(({ cleIdempotence: _key, empreinteIdempotence: _print, cleAnnulation: _cancel, ...purchase }) => ({
       ...purchase,
       total: Number(purchase.total),
       montantPaye: Number(purchase.montantPaye),
+      resteAPayer: Number(purchase.resteAPayer),
     })),
+    canCancel: can(context.role, "purchase:cancel"),
     products: products.map((p) => ({ ...p, prixAchat: Number(p.prixAchat) })),
     suppliers,
     currency: organization.devise,

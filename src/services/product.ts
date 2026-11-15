@@ -2,7 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { Errors } from "@/lib/api/errors";
 import { recordAuditLog } from "@/lib/api/audit";
 import { StockMovementType } from "@/generated/prisma/enums";
-import type { ProductFormData, ProductImportRow } from "@/lib/validations/product";
+import type { ProductFormData, ProductImportRow, ProductUpdateData } from "@/lib/validations/product";
+import { runTransaction } from "@/lib/transactions";
 import type { AuthContext } from "@/lib/auth/session";
 
 /**
@@ -80,7 +81,7 @@ export async function createProduct(context: AuthContext, storeId: number, data:
 export async function updateProduct(
   context: AuthContext,
   productId: number,
-  data: Omit<ProductFormData, "quantiteInitiale">,
+  data: ProductUpdateData,
 ) {
   const { organizationId } = context;
 
@@ -101,17 +102,19 @@ export async function updateProduct(
   const updated = await prisma.produit.updateMany({
     where: { id: productId, organisationId: organizationId },
     data: {
+      // Un champ ABSENT reste inchangé (mise à jour partielle) : une
+      // modification ne réactive jamais un produit archivé et n'efface pas sa
+      // catégorie. `categorieId: null` retire explicitement la catégorie.
       nom: data.nom,
-      // Champs absents du formulaire : laissés tels quels s'ils ne sont pas envoyés.
       description: data.description === undefined ? undefined : data.description || null,
       reference: data.reference === undefined ? undefined : data.reference || null,
       codeBarres: data.codeBarres === undefined ? undefined : data.codeBarres || null,
       unite: data.unite,
-      categorieId: data.categorieId ?? null,
+      categorieId: data.categorieId === undefined ? undefined : data.categorieId,
       prixAchat: data.prixAchat,
       prixVente: data.prixVente,
       seuilAlerte: data.seuilAlerte,
-      actif: data.actif ?? true,
+      actif: data.actif,
     },
   });
 
@@ -134,11 +137,35 @@ export async function updateProduct(
   return after;
 }
 
-export async function deleteProduct(context: AuthContext, productId: number) {
-  const deleted = await prisma.produit.deleteMany({
-    where: { id: productId, organisationId: context.organizationId },
+/**
+ * Retire un produit sans jamais perdre l'historique : un produit déjà vendu,
+ * acheté, compté, perdu ou mouvementé est archivé (actif = false) ; seul un
+ * produit sans aucune opération est supprimé définitivement. La base l'impose
+ * aussi (clés étrangères RESTRICT sur les ventes, achats et mouvements).
+ */
+export async function deleteProduct(context: AuthContext, productId: number): Promise<{ mode: "deleted" | "archived" }> {
+  return runTransaction(async (tx) => {
+    const product = await tx.produit.findFirst({
+      where: { id: productId, organisationId: context.organizationId },
+      select: {
+        id: true,
+        nom: true,
+        _count: { select: { lignesVente: true, lignesAchat: true, mouvementsStock: true, lignesInventaire: true, pertesStock: true, lignesRetour: true } },
+      },
+    });
+    if (!product) throw Errors.notFound("Produit introuvable");
+    const hasHistory = Object.values(product._count).some((count) => count > 0);
+    if (hasHistory) {
+      await tx.produit.update({ where: { id: product.id }, data: { actif: false } });
+    } else {
+      await tx.produit.delete({ where: { id: product.id } });
+    }
+    await recordAuditLog(
+      { organisationId: context.organizationId, utilisateurId: context.userId, action: hasHistory ? "product.archived" : "product.deleted", entite: "Produit", entiteId: product.id, metadonnees: { nom: product.nom } },
+      tx,
+    );
+    return { mode: hasHistory ? "archived" : "deleted" };
   });
-  if (deleted.count === 0) throw Errors.notFound("Produit introuvable");
 }
 
 /** Comparaison des noms et références sans tenir compte de la casse ni des espaces en trop. */
