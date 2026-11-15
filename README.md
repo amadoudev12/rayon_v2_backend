@@ -70,26 +70,22 @@ Les lectures de page du site (`/api/pages/**`) suivent le même schéma avec `ro
 
 ### Tests
 
-Les tests vident toutes les tables : ils refusent toute base dont le nom ne se termine pas par `_test`. Indiquez toujours une base **locale** :
+Les tests vident toutes les tables. Ils ne s’exécutent **que** sur la base désignée par `TEST_DATABASE_URL` (fichier `.env.test`, non versionné) : aucun repli sur `DATABASE_URL`, nom de base terminé par `_test`, serveur local obligatoire, et refus si la base est la même que `DATABASE_URL`.
 
 ```powershell
-$env:TEST_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/rayon_test"; npm test
+npm run test:db:up     # PostgreSQL isolé dans Docker (port 55432, données en mémoire)
+npm run db:check       # migrations appliquées sur la base de test == schema.prisma
+npm test               # tests d’intégration
+npm run test:db:down   # arrête et efface la base de test
 ```
 
-Sans `TEST_DATABASE_URL`, la base utilisée est celle de `DATABASE_URL` suffixée par `_test`, créée sur le même serveur : à éviter quand `DATABASE_URL` désigne la base de production.
+Contenu de `.env.test` :
 
-### Variables d'environnement
+```
+TEST_DATABASE_URL=postgresql://rayon_test:rayon_test@localhost:55432/rayon_test
+```
 
-| Variable | Rôle |
-| --- | --- |
-| `DATABASE_URL` | Connexion PostgreSQL utilisée par l'application |
-| `DIRECT_URL` | Optionnel : connexion utilisée par les migrations (pooler en mode session) |
-| `AUTH_SECRET` | Secret de signature des sessions. Obligatoire en production |
-| `PORT` | Port d'écoute (4000 par défaut) |
-| `FRONTEND_URL` | Adresse du site : seule origine autorisée à utiliser le cookie de session |
-| `CORS_ORIGINS` | Optionnel : autres origines de navigateur autorisées, séparées par des virgules |
-| `COOKIE_SECURE`, `COOKIE_SAMESITE` | Optionnel : réglages du cookie de session (voir `.env.example`) |
-| `TEST_DATABASE_URL` | Base de test |
+La CI (`.github/workflows/ci.yml`) exécute typecheck, lint, `db:check` et les tests sur une base PostgreSQL éphémère.
 
 ## Phase 1 commerciale
 

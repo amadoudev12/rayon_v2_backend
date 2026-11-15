@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**", "backup/**"]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Base PostgreSQL éphémère, propre à ce job : les tests ne touchent jamais
+    # une autre base (voir tests/setup/test-database.ts).
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: rayon_test
+          POSTGRES_PASSWORD: rayon_test
+          POSTGRES_DB: rayon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rayon_test -d rayon_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    env:
+      TEST_DATABASE_URL: postgresql://rayon_test:rayon_test@localhost:5432/rayon_test
+      # Variables factices : Prisma et l'application en exigent la présence.
+      DATABASE_URL: postgresql://unused:unused@localhost:5432/unused
+      AUTH_SECRET: ci-only-secret-not-used-anywhere-else-0123456789
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Types
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Schéma Prisma et migrations cohérents
+        run: npm run db:check
+      - name: Tests d'intégration
+        run: npm test

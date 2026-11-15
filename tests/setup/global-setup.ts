@@ -5,7 +5,8 @@ import { getTestDatabaseUrl } from "./test-database";
 /**
  * Exécuté une fois avant tous les tests : crée la base de test si besoin puis
  * y applique les migrations Prisma, pour qu'elle ait exactement le schéma de
- * production.
+ * production. `getTestDatabaseUrl` refuse toute base qui ne soit pas une base
+ * de test isolée.
  */
 export default async function globalSetup() {
   const testUrl = getTestDatabaseUrl();
@@ -29,9 +30,9 @@ export default async function globalSetup() {
     await client.end();
   }
 
+  // DIRECT_URL est prioritaire dans prisma.config.ts : on force les deux
+  // variables sur la base de test, sinon les migrations partiraient ailleurs.
   execSync("npx prisma migrate deploy", {
-    // DIRECT_URL est prioritaire dans prisma.config.ts : on la force aussi,
-    // sinon les migrations partiraient sur la vraie base.
     env: { ...process.env, DATABASE_URL: testUrl, DIRECT_URL: testUrl },
     stdio: "pipe",
   });

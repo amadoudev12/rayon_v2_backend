@@ -1,0 +1,24 @@
+# Base PostgreSQL ISOLÉE pour les tests automatisés.
+#
+#   docker compose -f docker-compose.test.yml up -d
+#
+# Elle n'a rien en commun avec la base de développement (DATABASE_URL) ni avec
+# la production (Supabase) : autre serveur, autre port, données en mémoire
+# (tmpfs) effacées à l'arrêt du conteneur. Les tests la vident à chaque cas.
+services:
+  rayon-test-db:
+    image: postgres:17-alpine
+    container_name: rayon-test-db
+    environment:
+      POSTGRES_USER: rayon_test
+      POSTGRES_PASSWORD: rayon_test
+      POSTGRES_DB: rayon_test
+    ports:
+      - "55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rayon_test -d rayon_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
