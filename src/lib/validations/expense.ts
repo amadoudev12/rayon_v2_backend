@@ -17,7 +17,11 @@ export const expenseSchema = z.object({
   note: z.string().trim().optional().or(z.literal("")),
   date: z.coerce.date().optional(),
   boutiqueId: z.coerce.number().int().positive().optional().nullable(),
-  organisationnelle: z.coerce.boolean().optional().default(false),
+  // Booléen strict : `z.coerce.boolean()` lirait la chaîne "false" comme vrai.
+  organisationnelle: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .optional()
+    .default(false),
 });
 
 export type ExpenseFormData = z.infer<typeof expenseSchema>;

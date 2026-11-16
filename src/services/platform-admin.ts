@@ -8,6 +8,7 @@ import { identifierTakenMessage, identifierWhere, parseIdentifier } from "@/lib/
 import { containsText } from "@/lib/search";
 import { slugify } from "@/lib/slug";
 import { toNumber } from "@/lib/money";
+import { getNetRevenue } from "@/services/finance";
 import { getPagination, getSort, type Pagination } from "@/lib/api/pagination";
 import type { AdminCreateOrganizationData, AdminProfileData } from "@/lib/validations/admin";
 import {
@@ -105,7 +106,8 @@ export async function listOrganizations(options: {
     LEFT JOIN LATERAL (
       SELECT
         (COUNT(*) FILTER (WHERE v."statut" = 'COMPLETED'))::int AS "sales",
-        COALESCE(SUM(v."total") FILTER (WHERE v."statut" = 'COMPLETED'), 0)::float8 AS "revenue"
+        -- CA net (ventes terminées − retours), même définition que finance.ts.
+        COALESCE(SUM(v."total" - v."montantRetourne") FILTER (WHERE v."statut" = 'COMPLETED'), 0)::float8 AS "revenue"
       FROM "Vente" v WHERE v."organisationId" = o."id"
     ) s ON TRUE
     LEFT JOIN LATERAL (SELECT ${ORGANIZATION_LAST_ACTIVITY_SQL} AS "lastActivity") a ON TRUE
@@ -223,18 +225,25 @@ export async function getOrganizationDetails(organizationId: number) {
 
   const [allTime, month, cancelledCount, activeProducts, [activity], trendRows, recentSales, topProductRows, recentProducts, feed] =
     await Promise.all([
-      prisma.vente.aggregate({ where: completed, _sum: { total: true }, _count: true }),
+      prisma.vente.aggregate({ where: completed, _sum: { total: true, montantRetourne: true }, _count: true }),
       prisma.vente.aggregate({ where: { ...completed, creeLe: { gte: monthStart } }, _sum: { total: true }, _count: true }),
       prisma.vente.count({ where: { organisationId: organizationId, statut: SaleStatus.CANCELLED } }),
       prisma.produit.count({ where: { organisationId: organizationId, actif: true } }),
       prisma.$queryRaw<{ lastActivity: Date | null }[]>`
         SELECT ${ORGANIZATION_LAST_ACTIVITY_SQL} AS "lastActivity" FROM "Organisation" o WHERE o."id" = ${organizationId}
       `,
+      // CA net par jour : ventes du jour − retours du jour (sur des ventes terminées).
       prisma.$queryRaw<{ bucket: string; revenue: number; count: number }[]>`
-        SELECT to_char(date_trunc('day', v."creeLe"), 'YYYY-MM-DD') AS "bucket",
-          COALESCE(SUM(v."total"), 0)::float8 AS "revenue", (COUNT(*))::int AS "count"
-        FROM "Vente" v
-        WHERE v."organisationId" = ${organizationId} AND v."statut" = 'COMPLETED' AND v."creeLe" >= ${sqlTimestamp(trendStart)}
+        SELECT d."bucket", COALESCE(SUM(d."amount"), 0)::float8 AS "revenue", (SUM(d."sales"))::int AS "count"
+        FROM (
+          SELECT to_char(date_trunc('day', v."creeLe"), 'YYYY-MM-DD') AS "bucket", v."total" AS "amount", 1 AS "sales"
+          FROM "Vente" v
+          WHERE v."organisationId" = ${organizationId} AND v."statut" = 'COMPLETED' AND v."creeLe" >= ${sqlTimestamp(trendStart)}
+          UNION ALL
+          SELECT to_char(date_trunc('day', r."creeLe"), 'YYYY-MM-DD'), -r."montant", 0
+          FROM "RetourVente" r JOIN "Vente" v ON v."id" = r."venteId"
+          WHERE r."organisationId" = ${organizationId} AND v."statut" = 'COMPLETED' AND r."creeLe" >= ${sqlTimestamp(trendStart)}
+        ) d
         GROUP BY 1
       `,
       prisma.vente.findMany({
@@ -284,7 +293,9 @@ export async function getOrganizationDetails(organizationId: number) {
     };
   });
 
-  const revenue = toNumber(allTime._sum.total ?? 0);
+  // CA net : un retour réduit le chiffre d'affaires (même règle que finance.ts).
+  const revenue = toNumber((allTime._sum.total ?? new Prisma.Decimal(0)).minus(allTime._sum.montantRetourne ?? 0));
+  const monthRevenue = await getNetRevenue({ organisationId: organizationId, storeId: null }, { start: monthStart, end: new Date(now.getTime() + DAY_MS) });
   const owner = organization.membres.find((member) => member.role === Role.OWNER) ?? null;
 
   return {
@@ -323,7 +334,7 @@ export async function getOrganizationDetails(organizationId: number) {
     },
     revenue: {
       allTime: revenue,
-      month: toNumber(month._sum.total ?? 0),
+      month: monthRevenue,
       monthSales: month._count,
       averageBasket: allTime._count > 0 ? revenue / allTime._count : 0,
     },

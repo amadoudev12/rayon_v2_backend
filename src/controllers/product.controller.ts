@@ -1,3 +1,4 @@
+import { resolveRequestStoreId } from "@/lib/auth/store";
 import type { Request, Response } from "express";
 import * as productService from "@/services/product";
 import { prisma } from "@/lib/prisma";
@@ -17,7 +18,7 @@ export async function getAllProducts(req: Request, res: Response) {
   const context = req.user;
   const params = searchParams(req);
 
-  const storeId = await resolveActiveStoreId(context, Number(params.get("storeId")) || undefined);
+  const storeId = await resolveRequestStoreId(context, Number(params.get("storeId")) || undefined);
   const search = params.get("search")?.trim() ?? "";
   const categoryId = Number(params.get("categoryId")) || undefined;
   const status = params.get("status"); // "active" | "archived" | null (all)

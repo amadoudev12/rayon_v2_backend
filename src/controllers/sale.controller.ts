@@ -5,7 +5,6 @@ import { pricePolicyFor } from "@/services/pricing-policy";
 import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
 import { prisma } from "@/lib/prisma";
 import { containsText } from "@/lib/search";
-import { resolveActiveStoreId } from "@/lib/auth/session";
 import { resolveRequestStoreId } from "@/lib/auth/store";
 import { can } from "@/lib/auth/permissions";
 import { parsePeriod } from "@/lib/period";
@@ -22,7 +21,7 @@ export async function getAllSales(req: Request, res: Response) {
   const context = req.user;
   const params = searchParams(req);
 
-  const storeId = await resolveActiveStoreId(context, Number(params.get("storeId")) || undefined);
+  const storeId = await resolveRequestStoreId(context, Number(params.get("storeId")) || undefined);
   const search = params.get("search")?.trim() ?? "";
   const date = params.get("date") ?? "";
   const pagination = getPagination(params, 10);
@@ -87,7 +86,7 @@ export async function getSalesStatsSummary(req: Request, res: Response) {
   const context = req.user;
   const params = searchParams(req);
 
-  const storeId = await resolveActiveStoreId(context, Number(params.get("storeId")) || undefined);
+  const storeId = await resolveRequestStoreId(context, Number(params.get("storeId")) || undefined);
   const organization = await prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { fuseauHoraire: true } });
   const period = parsePeriod(params, new Date(), organization.fuseauHoraire);
   const stats = await getSalesStats(context, storeId, period);

@@ -446,6 +446,8 @@ model MouvementStock {
   quantiteApres     Int?
   coutUnitaire      Decimal?          @db.Decimal(12, 2)
   sourceReference   String?
+  /// Clé d'idempotence d'un ajustement manuel (NULL pour les autres mouvements).
+  cleIdempotence    String?
 
   boutiqueId Int
   boutique   Boutique @relation(fields: [boutiqueId], references: [id], onDelete: Cascade)
@@ -471,6 +473,7 @@ model MouvementStock {
 
   creeLe DateTime @default(now())
 
+  @@unique([boutiqueId, cleIdempotence])
   @@index([boutiqueId, produitId, creeLe])
   @@index([perteStockId])
   @@index([retourVenteId])

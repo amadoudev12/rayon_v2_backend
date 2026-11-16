@@ -9,7 +9,10 @@ import { toNumber } from "@/lib/money";
  * `organisationId`, l'appelant doit donc avoir passé `requireSuperAdmin()`.
  *
  * Règles de calcul :
- * - seules les ventes terminées (COMPLETED) comptent dans le chiffre d'affaires ;
+ * - seules les ventes terminées (COMPLETED) comptent dans le chiffre d'affaires,
+ *   NET des retours : chaque vente compte pour `total − montantRetourne`, à sa
+ *   date de vente (le tableau de bord d'une boutique, lui, déduit un retour à
+ *   sa date de retour ; les deux coïncident dès que la période couvre les deux) ;
  * - chaque organisation a sa propre devise : les montants ne sont jamais
  *   additionnés d'une devise à l'autre, le chiffre d'affaires est toujours
  *   calculé pour UNE devise ; les nombres de ventes, eux, sont globaux ;
@@ -118,17 +121,17 @@ async function getRevenueByCurrency(range: PlatformRange, now: Date) {
     SELECT
       o."devise" AS "currency",
       (COUNT(DISTINCT o."id"))::int AS "organizations",
-      COALESCE(SUM(v."total"), 0)::float8 AS "allTime",
+      COALESCE(SUM(v."total" - v."montantRetourne"), 0)::float8 AS "allTime",
       (COUNT(v."id"))::int AS "allTimeCount",
-      COALESCE(SUM(v."total") FILTER (WHERE v."creeLe" >= ${sqlTimestamp(today)}), 0)::float8 AS "today",
+      COALESCE(SUM(v."total" - v."montantRetourne") FILTER (WHERE v."creeLe" >= ${sqlTimestamp(today)}), 0)::float8 AS "today",
       (COUNT(v."id") FILTER (WHERE v."creeLe" >= ${sqlTimestamp(today)}))::int AS "todayCount",
-      COALESCE(SUM(v."total") FILTER (WHERE v."creeLe" >= ${sqlTimestamp(monthStart)}), 0)::float8 AS "month",
-      COALESCE(SUM(v."total") FILTER (
+      COALESCE(SUM(v."total" - v."montantRetourne") FILTER (WHERE v."creeLe" >= ${sqlTimestamp(monthStart)}), 0)::float8 AS "month",
+      COALESCE(SUM(v."total" - v."montantRetourne") FILTER (
         WHERE v."creeLe" >= ${sqlTimestamp(previousMonthStart)} AND v."creeLe" < ${sqlTimestamp(previousMonthEnd)}
       ), 0)::float8 AS "previousMonth",
-      COALESCE(SUM(v."total") FILTER (WHERE v."creeLe" >= ${sqlTimestamp(period.start)}), 0)::float8 AS "period",
+      COALESCE(SUM(v."total" - v."montantRetourne") FILTER (WHERE v."creeLe" >= ${sqlTimestamp(period.start)}), 0)::float8 AS "period",
       (COUNT(v."id") FILTER (WHERE v."creeLe" >= ${sqlTimestamp(period.start)}))::int AS "periodCount",
-      COALESCE(SUM(v."total") FILTER (
+      COALESCE(SUM(v."total" - v."montantRetourne") FILTER (
         WHERE v."creeLe" >= ${sqlTimestamp(period.previousStart)} AND v."creeLe" < ${sqlTimestamp(period.previousEnd)}
       ), 0)::float8 AS "previousPeriod",
       (COUNT(v."id") FILTER (
@@ -153,7 +156,7 @@ async function getSalesSeries(range: PlatformRange, currency: string, now: Date)
   const rows = await prisma.$queryRaw<{ bucket: string; revenue: number; count: number }[]>`
     SELECT
       to_char(date_trunc(${Prisma.raw(`'${period.bucket}'`)}, v."creeLe"), 'YYYY-MM-DD"T"HH24:MI:SS') AS "bucket",
-      COALESCE(SUM(v."total") FILTER (WHERE o."devise" = ${currency}), 0)::float8 AS "revenue",
+      COALESCE(SUM(v."total" - v."montantRetourne") FILTER (WHERE o."devise" = ${currency}), 0)::float8 AS "revenue",
       (COUNT(*))::int AS "count"
     FROM "Vente" v
     JOIN "Organisation" o ON o."id" = v."organisationId"
@@ -309,7 +312,7 @@ export async function getPlatformOverview(options: { range?: PlatformRange; curr
     prisma.boutique.count(),
     prisma.$queryRaw<{ id: number; name: string; currency: string; revenue: number; sales: number }[]>`
       SELECT o."id", o."nom" AS "name", o."devise" AS "currency",
-        COALESCE(SUM(v."total"), 0)::float8 AS "revenue", (COUNT(*))::int AS "sales"
+        COALESCE(SUM(v."total" - v."montantRetourne"), 0)::float8 AS "revenue", (COUNT(*))::int AS "sales"
       FROM "Vente" v
       JOIN "Organisation" o ON o."id" = v."organisationId"
       WHERE v."statut" = 'COMPLETED' AND v."creeLe" >= ${sqlTimestamp(period.start)}
@@ -401,7 +404,7 @@ export async function getPlatformAnalytics(options: { range?: PlatformRange; cur
     getSalesSeries(range, currency, now),
     prisma.$queryRaw<{ method: string; count: number; revenue: number }[]>`
       SELECT v."modePaiement"::text AS "method", (COUNT(*))::int AS "count",
-        COALESCE(SUM(v."total") FILTER (WHERE o."devise" = ${currency}), 0)::float8 AS "revenue"
+        COALESCE(SUM(v."total" - v."montantRetourne") FILTER (WHERE o."devise" = ${currency}), 0)::float8 AS "revenue"
       FROM "Vente" v
       JOIN "Organisation" o ON o."id" = v."organisationId"
       WHERE v."statut" = 'COMPLETED' AND v."creeLe" >= ${sqlTimestamp(period.start)}
@@ -412,7 +415,7 @@ export async function getPlatformAnalytics(options: { range?: PlatformRange; cur
       { id: number; name: string; currency: string; actif: boolean; revenue: number; sales: number; lastActivity: Date | null }[]
     >`
       SELECT o."id", o."nom" AS "name", o."devise" AS "currency", o."actif",
-        COALESCE(SUM(v."total"), 0)::float8 AS "revenue", (COUNT(*))::int AS "sales",
+        COALESCE(SUM(v."total" - v."montantRetourne"), 0)::float8 AS "revenue", (COUNT(*))::int AS "sales",
         ${ORGANIZATION_LAST_ACTIVITY_SQL} AS "lastActivity"
       FROM "Vente" v
       JOIN "Organisation" o ON o."id" = v."organisationId"

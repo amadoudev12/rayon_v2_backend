@@ -38,7 +38,7 @@ describe("pertes de stock", () => {
   it("retire le stock une fois, réutilise une clé idempotente et restitue au moyen d'un mouvement", async () => {
     const shop = await createShop();
     const product = await createProduit(shop.organisation.id, shop.boutique.id, { stock: 5, prixAchat: 250 });
-    const input = { boutiqueId: shop.boutique.id, produitId: product.id, quantite: 2, motif: "CASSE" };
+    const input = { boutiqueId: shop.boutique.id, produitId: product.id, quantite: 2, motif: "CASSE" as const };
     const first = await createLoss(shop.context, input, "test-loss-key-01");
     const retry = await createLoss(shop.context, input, "test-loss-key-01");
     expect(retry.id).toBe(first.id);

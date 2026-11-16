@@ -217,7 +217,11 @@ export async function createSale(
 
       const quantitiesAfter = new Map<number, number>();
       for (const line of [...saleLines].sort((a, b) => a.produitId - b.produitId)) {
-        const updated = await tx.$queryRaw<Array<{ quantite: number }>>`UPDATE "Stock" SET "quantite" = "quantite" - ${line.quantite}, "modifieLe" = NOW() WHERE "boutiqueId" = ${storeId} AND "produitId" = ${line.produitId} AND "quantite" >= ${line.quantite} RETURNING "quantite"`;
+        const updated = await tx.$queryRaw<Array<{ quantite: number }>>`
+          UPDATE "Stock"
+          SET "quantite" = "quantite" - ${line.quantite}, "modifieLe" = NOW()
+          WHERE "boutiqueId" = ${storeId} AND "produitId" = ${line.produitId} AND "quantite" >= ${line.quantite}
+          RETURNING "quantite"`;
         if (updated.length !== 1) {
           throw Errors.conflict(`Stock insuffisant pour "${line.produit.nom}"`);
         }
@@ -380,7 +384,11 @@ export async function cancelSale(context: AuthContext, saleId: number, input: Ca
     const quantitiesAfter = new Map<number, number>();
     for (const { line, quantite } of toRestock) {
       await tx.$executeRaw`INSERT INTO "Stock" ("boutiqueId", "produitId", "quantite", "modifieLe") VALUES (${sale.boutiqueId}, ${line.produitId}, 0, NOW()) ON CONFLICT ("boutiqueId", "produitId") DO NOTHING`;
-      const updated = await tx.$queryRaw<Array<{ quantite: number }>>`UPDATE "Stock" SET "quantite" = "quantite" + ${quantite}, "modifieLe" = NOW() WHERE "boutiqueId" = ${sale.boutiqueId} AND "produitId" = ${line.produitId} RETURNING "quantite"`;
+      const updated = await tx.$queryRaw<Array<{ quantite: number }>>`
+        UPDATE "Stock"
+        SET "quantite" = "quantite" + ${quantite}, "modifieLe" = NOW()
+        WHERE "boutiqueId" = ${sale.boutiqueId} AND "produitId" = ${line.produitId}
+        RETURNING "quantite"`;
       quantitiesAfter.set(line.produitId, updated[0]!.quantite);
     }
     if (toRestock.length > 0) {

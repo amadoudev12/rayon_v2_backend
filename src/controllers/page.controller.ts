@@ -5,9 +5,9 @@ import { saleSummarySelect, serializeSaleSummary } from "@/lib/serializers/sale"
 import { pricingLimitsFor } from "@/services/pricing-policy";
 import { archiveFilter } from "@/services/party";
 import { listStoreStock } from "@/services/stock-query";
+import { movementFilters } from "@/services/stock-movements";
 import { getSubscriptionAccess } from "@/services/subscription";
-import { PaymentMethod, SaleStatus, StockMovementType } from "@/generated/prisma/enums";
-import { z } from "zod";
+import { PaymentMethod, SaleStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { parsePeriod } from "@/lib/period";
 import { containsText } from "@/lib/search";
@@ -171,28 +171,18 @@ export async function getStockPage(req: Request, res: Response) {
 }
 
 export async function getStockMovementsPage(req: Request, res: Response) {
-  const context = req.user;
   const params = searchParams(req);
-  const storeId = await getActiveStoreId(context);
   const pagination = getPagination(params, 30);
-  const search = params.get("search")?.trim() ?? "";
-  const typeValue = params.get("type");
-  const type = typeValue ? z.enum(StockMovementType).parse(typeValue) : undefined;
-  const from = params.get("from") ? new Date(params.get("from")!) : undefined;
-  const to = params.get("to") ? new Date(params.get("to")!) : undefined;
-  const userId = Number(params.get("userId")) || undefined;
-  const sourceReference = params.get("source")?.trim() ?? "";
-  const where = { boutiqueId: storeId, produit: { organisationId: context.organizationId, ...(search ? { nom: containsText(search) } : {}) }, ...(userId ? { utilisateurId: userId } : {}), ...(sourceReference ? { sourceReference: { contains: sourceReference, mode: "insensitive" as const } } : {}), ...(type ? { type } : {}), ...(from || to ? { creeLe: { ...(from && !Number.isNaN(from.getTime()) ? { gte: from } : {}), ...(to && !Number.isNaN(to.getTime()) ? { lte: to } : {}) } } : {}) };
+  // Mêmes filtres que l'API et l'export : boutique du sélecteur, période dans le fuseau de l'organisation.
+  const { where, period } = await movementFilters(req.user, params, { requirePeriod: false });
   const [movements, total] = await Promise.all([
     prisma.mouvementStock.findMany({
       where,
       include: {
         produit: { select: { id: true, nom: true, unite: true } },
         utilisateur: { select: { prenom: true, nom: true } },
-        vente: { select: { id: true } },
-        achat: { select: { id: true } },
       },
-      orderBy: { creeLe: "desc" },
+      orderBy: [{ creeLe: "desc" }, { id: "desc" }],
       skip: (pagination.page - 1) * pagination.limit,
       take: pagination.limit,
     }),
@@ -204,6 +194,7 @@ export async function getStockMovementsPage(req: Request, res: Response) {
     page: pagination.page,
     totalPages: paginationMeta(pagination, total).totalPages,
     total,
+    period: period ? { from: period.from, to: period.to } : null,
   });
 }
 

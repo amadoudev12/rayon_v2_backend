@@ -2,6 +2,7 @@ import { Router } from "express";
 import { verifyPageToken } from "@/middleware/verifyToken";
 import { requirePageSuperAdmin } from "@/middleware/requireSuperAdmin";
 import { requirePermission } from "@/middleware/requirePermission";
+import { getLossesPage, getStockControlPage, getStockReportsPage } from "@/controllers/stock-page.controller";
 import { SESSION_RENEW_AFTER_MS, renewSessionCookie } from "@/lib/auth/web-session";
 import {
   getOnboardingPage,
@@ -58,6 +59,9 @@ router.get("/dashboard", verifyPageToken, getDashboardPage);
 router.get("/produits", verifyPageToken, getProductsPage);
 router.get("/stock", verifyPageToken, getStockPage);
 router.get("/stock/mouvements", verifyPageToken, requirePermission("stock-movement:read"), getStockMovementsPage);
+router.get("/stock/pertes", verifyPageToken, requirePermission("loss:read"), getLossesPage);
+router.get("/stock/controle", verifyPageToken, requirePermission("stock:report"), getStockControlPage);
+router.get("/stock/rapports", verifyPageToken, requirePermission("stock:report"), getStockReportsPage);
 router.get("/ventes", verifyPageToken, getSalesPage);
 router.get("/ventes/nouvelle", verifyPageToken, getNewSalePage);
 router.get("/creances", verifyPageToken, getCreditsPage);

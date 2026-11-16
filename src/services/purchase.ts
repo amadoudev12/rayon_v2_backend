@@ -117,7 +117,11 @@ export async function createPurchase(
       const quantitiesAfter = new Map<number, number>();
       for (const line of [...lines].sort((a, b) => a.produitId - b.produitId)) {
         await tx.$executeRaw`INSERT INTO "Stock" ("boutiqueId", "produitId", "quantite", "modifieLe") VALUES (${storeId}, ${line.produitId}, 0, NOW()) ON CONFLICT ("boutiqueId", "produitId") DO NOTHING`;
-        const updated = await tx.$queryRaw<{ quantite: number }[]>`UPDATE "Stock" SET "quantite" = "quantite" + ${line.quantite}, "modifieLe" = NOW() WHERE "boutiqueId" = ${storeId} AND "produitId" = ${line.produitId} RETURNING "quantite"`;
+        const updated = await tx.$queryRaw<{ quantite: number }[]>`
+          UPDATE "Stock"
+          SET "quantite" = "quantite" + ${line.quantite}, "modifieLe" = NOW()
+          WHERE "boutiqueId" = ${storeId} AND "produitId" = ${line.produitId}
+          RETURNING "quantite"`;
         quantitiesAfter.set(line.produitId, updated[0]!.quantite);
         await tx.produit.update({ where: { id: line.produitId }, data: { prixAchat: line.coutUnitaire } });
       }

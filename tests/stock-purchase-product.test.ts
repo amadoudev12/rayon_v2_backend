@@ -5,7 +5,7 @@ import { adjustStock } from "@/services/stock";
 import { createProduct, importProducts, updateProduct } from "@/services/product";
 import type { ProductImportRow } from "@/lib/validations/product";
 import { StockMovementType } from "@/generated/prisma/enums";
-import { createProduit, createShop, resetDatabase, stockOf } from "./helpers/factories";
+import { createProduit, createShop, resetDatabase, stockOf, testKey } from "./helpers/factories";
 
 beforeEach(resetDatabase);
 
@@ -76,7 +76,7 @@ describe("adjustStock — correction manuelle", () => {
     const shop = await createShop();
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { stock: 10 });
 
-    const stock = await adjustStock(shop.context, shop.boutique.id, produit.id, { variationQuantite: -3, note: "Casse" });
+    const stock = await adjustStock(shop.context, shop.boutique.id, produit.id, { variationQuantite: -3, note: "Casse" }, testKey("adjust"));
 
     expect(stock.quantite).toBe(7);
     const mouvement = await prisma.mouvementStock.findFirstOrThrow({ where: { produitId: produit.id } });
@@ -88,7 +88,7 @@ describe("adjustStock — correction manuelle", () => {
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { stock: 2 });
 
     await expect(
-      adjustStock(shop.context, shop.boutique.id, produit.id, { variationQuantite: -3 }),
+      adjustStock(shop.context, shop.boutique.id, produit.id, { variationQuantite: -3 }, testKey("adjust")),
     ).rejects.toMatchObject({ status: 409 });
 
     expect(await stockOf(shop.boutique.id, produit.id)).toBe(2);
@@ -102,10 +102,10 @@ describe("adjustStock — correction manuelle", () => {
     const produitAutre = await createProduit(other.organisation.id, other.boutique.id, { stock: 5 });
 
     await expect(
-      adjustStock(shop.context, shop.boutique.id, produitAutre.id, { variationQuantite: 1 }),
+      adjustStock(shop.context, shop.boutique.id, produitAutre.id, { variationQuantite: 1 }, testKey("adjust")),
     ).rejects.toMatchObject({ status: 404 });
     await expect(
-      adjustStock(shop.context, other.boutique.id, produit.id, { variationQuantite: 1 }),
+      adjustStock(shop.context, other.boutique.id, produit.id, { variationQuantite: 1 }, testKey("adjust")),
     ).rejects.toMatchObject({ status: 403 });
 
     expect(await stockOf(other.boutique.id, produitAutre.id)).toBe(5);

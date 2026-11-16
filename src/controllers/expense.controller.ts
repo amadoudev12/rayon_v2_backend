@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
-import { resolveActiveStoreId } from "@/lib/auth/session";
 import { resolveRequestStoreId } from "@/lib/auth/store";
 import { expenseSchema } from "@/lib/validations/expense";
 import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
@@ -13,7 +12,7 @@ export async function getAllExpenses(req: Request, res: Response) {
   const context = req.user;
   const pagination = getPagination(searchParams(req), 20);
 
-  const storeId = await resolveActiveStoreId(context, Number(searchParams(req).get("storeId")) || undefined);
+  const storeId = await resolveRequestStoreId(context, Number(searchParams(req).get("storeId")) || undefined);
   const where = { organisationId: context.organizationId, statut: ExpenseStatus.ACTIVE,
     ...(context.membershipStoreId ? { boutiqueId: storeId } : {}) };
 

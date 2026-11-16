@@ -1,7 +1,6 @@
 import type { Request, Response } from "express";
 import * as quoteService from "@/services/quote";
 import { prisma } from "@/lib/prisma";
-import { resolveActiveStoreId } from "@/lib/auth/session";
 import { resolveRequestStoreId } from "@/lib/auth/store";
 import { quoteSchema } from "@/lib/validations/quote";
 import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
@@ -12,7 +11,7 @@ export async function getAllQuotes(req: Request, res: Response) {
   const context = req.user;
   const params = searchParams(req);
 
-  const storeId = await resolveActiveStoreId(context, Number(params.get("storeId")) || undefined);
+  const storeId = await resolveRequestStoreId(context, Number(params.get("storeId")) || undefined);
   const pagination = getPagination(params, 10);
   const where = { organisationId: context.organizationId, boutiqueId: storeId };
 

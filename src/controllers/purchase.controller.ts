@@ -1,7 +1,6 @@
 import type { Request, Response } from "express";
 import * as purchaseService from "@/services/purchase";
 import { prisma } from "@/lib/prisma";
-import { resolveActiveStoreId } from "@/lib/auth/session";
 import { resolveRequestStoreId } from "@/lib/auth/store";
 import { purchaseCancelSchema, purchaseSchema, supplierPaymentSchema } from "@/lib/validations/purchase";
 import { requireIdempotencyKey } from "@/lib/idempotency";
@@ -13,7 +12,7 @@ export async function getAllPurchases(req: Request, res: Response) {
   const context = req.user;
   const params = searchParams(req);
 
-  const storeId = await resolveActiveStoreId(context, Number(params.get("storeId")) || undefined);
+  const storeId = await resolveRequestStoreId(context, Number(params.get("storeId")) || undefined);
   const pagination = getPagination(params, 10);
   const unpaidOnly = params.get("statut") === "a_regler";
 

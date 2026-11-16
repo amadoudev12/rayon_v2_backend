@@ -5,7 +5,9 @@ import { resolveRequestStoreId } from "@/lib/auth/store";
 import { parsePeriod } from "@/lib/period";
 import { searchParams } from "@/lib/api/response";
 import { startCsv } from "@/lib/csv";
-import { PAYMENT_LABELS, SALE_STATUS_LABEL } from "@/lib/labels";
+import { MOVEMENT_TYPE_LABELS, PAYMENT_LABELS, SALE_STATUS_LABEL } from "@/lib/labels";
+import { Prisma } from "@/generated/prisma/client";
+import { movementFilters } from "@/services/stock-movements";
 
 /**
  * Exports CSV des données commerciales, produits par lots (aucun chargement
@@ -45,12 +47,17 @@ export async function exportSales(req: Request, res: Response) {
       },
     });
     for (const sale of sales) {
-      const cost = withCosts ? sale.lignes.reduce((sum, line) => sum + Number(line.coutUnitaire) * (line.quantite - line.quantiteRetournee), 0) : 0;
+      // Coût des articles conservés par le client (montants exacts, jamais de flottants).
+      const cost = withCosts
+        ? sale.lignes.reduce((sum, line) => sum.plus(line.coutUnitaire.times(line.quantite - line.quantiteRetournee)), new Prisma.Decimal(0))
+        : new Prisma.Decimal(0);
       write(
         [
           `VTE-${String(sale.id).padStart(5, "0")}`, sale.creeLe, SALE_STATUS_LABEL[sale.statut], sale.client?.nom ?? "Client de passage", `${sale.vendeur.prenom} ${sale.vendeur.nom}`,
           PAYMENT_LABELS[sale.modePaiement], sale.sousTotal, sale.remise, sale.total, sale.montantRetourne, sale.montantPaye, sale.resteAPayer, sale.dateEcheance,
-          ...(withCosts ? [Math.round(cost * 100) / 100, sale.statut === "COMPLETED" ? Math.round((Number(sale.total) - Number(sale.montantRetourne) - cost) * 100) / 100 : 0] : []),
+          ...(withCosts
+            ? [cost.toDecimalPlaces(2), sale.statut === "COMPLETED" ? sale.total.minus(sale.montantRetourne).minus(cost).toDecimalPlaces(2) : new Prisma.Decimal(0)]
+            : []),
         ],
         timeZone,
       );
@@ -127,10 +134,67 @@ export async function exportStock(req: Request, res: Response) {
       select: { id: true, quantite: true, produit: { select: { nom: true, reference: true, seuilAlerte: true, prixAchat: true, categorie: { select: { nom: true } } } } },
     });
     for (const row of rows) {
-      write([row.produit.nom, row.produit.reference, row.produit.categorie?.nom, row.quantite, row.produit.seuilAlerte, row.produit.prixAchat, Math.round(row.quantite * Number(row.produit.prixAchat) * 100) / 100]);
+      write([
+        row.produit.nom,
+        row.produit.reference,
+        row.produit.categorie?.nom,
+        row.quantite,
+        row.produit.seuilAlerte,
+        row.produit.prixAchat,
+        row.produit.prixAchat.times(row.quantite).toDecimalPlaces(2),
+      ]);
     }
     if (rows.length < BATCH) break;
     cursor = rows[rows.length - 1]!.id;
+  }
+  res.end();
+}
+
+/**
+ * Historique COMPLET des mouvements de stock correspondant aux filtres de
+ * l'écran (et non la seule page affichée), sur une période bornée : ce mois-ci
+ * par défaut, 366 jours au plus.
+ */
+export async function exportMovements(req: Request, res: Response) {
+  const { where, period, timeZone } = await movementFilters(req.user, searchParams(req), { requirePeriod: true });
+  const write = startCsv(res, `mouvements-stock-${period!.from}-${period!.to}.csv`, [
+    "Date", "Produit", "Type", "Variation", "Stock avant", "Stock après", "Document", "Utilisateur", "Note",
+  ]);
+  let cursor: number | undefined;
+  for (;;) {
+    const movements = await prisma.mouvementStock.findMany({
+      where,
+      orderBy: { id: "asc" },
+      take: BATCH,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      select: {
+        id: true, creeLe: true, type: true, variationQuantite: true, quantiteAvant: true, quantiteApres: true,
+        sourceReference: true, venteId: true, achatId: true, note: true,
+        produit: { select: { nom: true } },
+        utilisateur: { select: { prenom: true, nom: true } },
+      },
+    });
+    for (const movement of movements) {
+      const document =
+        movement.sourceReference ??
+        (movement.venteId ? `VTE-${String(movement.venteId).padStart(5, "0")}` : movement.achatId ? `ACH-${String(movement.achatId).padStart(5, "0")}` : "");
+      write(
+        [
+          movement.creeLe,
+          movement.produit.nom,
+          MOVEMENT_TYPE_LABELS[movement.type],
+          movement.variationQuantite,
+          movement.quantiteAvant,
+          movement.quantiteApres,
+          document,
+          `${movement.utilisateur.prenom} ${movement.utilisateur.nom}`,
+          movement.note,
+        ],
+        timeZone,
+      );
+    }
+    if (movements.length < BATCH) break;
+    cursor = movements[movements.length - 1]!.id;
   }
   res.end();
 }

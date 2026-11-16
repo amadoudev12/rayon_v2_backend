@@ -78,7 +78,7 @@ function attacksOn(target: Fixture) {
     ["GET produit", request(app).get(`/api/products/${target.produit.id}`)],
     ["PUT produit", request(app).put(`/api/products/${target.produit.id}`).send({ nom: "Piraté", unite: "u", prixAchat: 1, prixVente: 2, seuilAlerte: 1 })],
     ["DELETE produit", request(app).delete(`/api/products/${target.produit.id}`)],
-    ["Ajustement de stock", request(app).post(`/api/products/${target.produit.id}/stock`).send({ variationQuantite: -5 })],
+    ["Ajustement de stock", request(app).post(`/api/products/${target.produit.id}/stock`).set(key()).send({ variationQuantite: -5 })],
     ["PUT catégorie", request(app).put(`/api/categories/${target.categorie.id}`).send({ nom: "Piratée" })],
     ["DELETE catégorie", request(app).delete(`/api/categories/${target.categorie.id}`)],
     ["PUT client", request(app).put(`/api/customers/${target.client.id}`).send({ nom: "Piraté" })],
@@ -174,7 +174,7 @@ describe("isolation entre boutiques d'une même organisation", () => {
       ["Annulation de perte", request(app).post(`/api/losses/${A.loss.id}/cancel`).send({ motif: "Autre boutique" })],
       ["GET inventaire", request(app).get(`/api/inventories/${A.inventory.id}`)],
       ["Ventes de la boutique principale", request(app).get(`/api/sales?storeId=${A.shop.boutique.id}`)],
-      ["Ajustement de stock principal", request(app).post(`/api/products/${A.produit.id}/stock`).send({ variationQuantite: -1, boutiqueId: A.shop.boutique.id })],
+      ["Ajustement de stock principal", request(app).post(`/api/products/${A.produit.id}/stock`).set({ "Idempotency-Key": testKey("attack") }).send({ variationQuantite: -1, boutiqueId: A.shop.boutique.id })],
     ] as const;
 
     const breaches: string[] = [];
