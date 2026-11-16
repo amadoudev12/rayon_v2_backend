@@ -17,3 +17,13 @@ export async function getActiveStoreId(context: AuthContext): Promise<number> {
   const requested = raw ? Number(raw) : undefined;
   return resolveActiveStoreId(context, requested);
 }
+
+/**
+ * Boutique visée par une requête : celle demandée explicitement (mobile,
+ * `boutiqueId` / `storeId`), sinon la boutique ACTIVE du sélecteur du site
+ * (cookie), jamais la boutique par défaut de l'organisation. Toujours validée
+ * contre l'organisation et la boutique imposée au membre.
+ */
+export async function resolveRequestStoreId(context: AuthContext, requestedStoreId?: number | null): Promise<number> {
+  return requestedStoreId ? resolveActiveStoreId(context, requestedStoreId) : getActiveStoreId(context);
+}

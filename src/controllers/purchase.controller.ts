@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import * as purchaseService from "@/services/purchase";
 import { prisma } from "@/lib/prisma";
 import { resolveActiveStoreId } from "@/lib/auth/session";
+import { resolveRequestStoreId } from "@/lib/auth/store";
 import { purchaseCancelSchema, purchaseSchema, supplierPaymentSchema } from "@/lib/validations/purchase";
 import { requireIdempotencyKey } from "@/lib/idempotency";
 import { jsonData, jsonPage, routeId, searchParams } from "@/lib/api/response";
@@ -48,7 +49,7 @@ function serializePurchase(purchase: purchaseService.PurchaseWithDetails) {
 export async function createPurchase(req: Request, res: Response) {
   const context = req.user;
   const parsed = purchaseSchema.parse(req.body);
-  const storeId = await resolveActiveStoreId(context, parsed.boutiqueId);
+  const storeId = await resolveRequestStoreId(context, parsed.boutiqueId);
 
   const purchase = await purchaseService.createPurchase(context, storeId, parsed, requireIdempotencyKey(req));
   return jsonData(res, serializePurchase(purchase), { status: 201 });

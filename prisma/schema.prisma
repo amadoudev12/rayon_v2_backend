@@ -165,6 +165,7 @@ model Utilisateur {
   retoursVente             RetourVente[]            @relation("RetourCreePar")
   paiementsAnnules         PaiementVente[]          @relation("PaiementAnnulation")
   sessions                 SessionUtilisateur[]
+  ventesEnAttente          VenteEnAttente[]         @relation("VenteEnAttenteCreePar")
   evenementsSecurite       JournalSecurite[]
 
   creeLe    DateTime @default(now())
@@ -188,22 +189,23 @@ model Organisation {
   /// Remise maximale accordée par un gérant. Propriétaire et administrateur : sans limite.
   remiseMaxGerantPct  Int     @default(30)
 
-  membres       Membre[]
-  boutiques     Boutique[]
-  categories    Categorie[]
-  produits      Produit[]
-  clients       Client[]
-  fournisseurs  Fournisseur[]
-  ventes        Vente[]
-  achats        Achat[]
-  depenses      Depense[]
-  devis         Devis[]
-  journauxAudit JournalAudit[]
-  inventaires   Inventaire[]
-  pertesStock   PerteStock[]
-  seuilsStock   SeuilStockBoutique[]
-  retoursVente  RetourVente[]
-  abonnement    Abonnement?
+  membres         Membre[]
+  boutiques       Boutique[]
+  categories      Categorie[]
+  produits        Produit[]
+  clients         Client[]
+  fournisseurs    Fournisseur[]
+  ventes          Vente[]
+  achats          Achat[]
+  depenses        Depense[]
+  devis           Devis[]
+  journauxAudit   JournalAudit[]
+  inventaires     Inventaire[]
+  pertesStock     PerteStock[]
+  seuilsStock     SeuilStockBoutique[]
+  retoursVente    RetourVente[]
+  abonnement      Abonnement?
+  ventesEnAttente VenteEnAttente[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
@@ -255,6 +257,7 @@ model Boutique {
   pertesStock     PerteStock[]
   seuilsStock     SeuilStockBoutique[]
   retoursVente    RetourVente[]
+  ventesEnAttente VenteEnAttente[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
@@ -492,8 +495,9 @@ model Client {
   organisationId Int
   organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
-  ventes Vente[]
-  devis  Devis[]
+  ventes          Vente[]
+  devis           Devis[]
+  ventesEnAttente VenteEnAttente[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
@@ -1030,4 +1034,36 @@ model PaiementAbonnement {
 
   @@unique([fournisseur, referenceExterne])
   @@index([abonnementId, creeLe])
+}
+
+// ---------------------------------------------------------------------------
+// Ventes en attente (panier « garé » au comptoir)
+// ---------------------------------------------------------------------------
+
+/// Panier mis de côté pour servir un autre client, repris plus tard par
+/// n'importe quel membre de la boutique. Rien n'est encaissé ni sorti du
+/// stock : tout est revérifié à l'encaissement. Expire après 24 h.
+model VenteEnAttente {
+  id             Int      @id @default(autoincrement())
+  libelle        String
+  /// Panier : lignes (produit, quantité, prix négocié), client, paiement, remise…
+  panier         Json
+  nombreArticles Int
+  /// Total indicatif au moment de la mise en attente (prix négociés et remise).
+  totalEstime    Decimal  @db.Decimal(12, 2)
+  expireLe       DateTime
+
+  organisationId Int
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  boutiqueId     Int
+  boutique       Boutique     @relation(fields: [boutiqueId], references: [id], onDelete: Cascade)
+  clientId       Int?
+  client         Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  creeParId      Int
+  creePar        Utilisateur  @relation("VenteEnAttenteCreePar", fields: [creeParId], references: [id], onDelete: Cascade)
+
+  creeLe    DateTime @default(now())
+  modifieLe DateTime @updatedAt
+
+  @@index([organisationId, boutiqueId, expireLe])
 }

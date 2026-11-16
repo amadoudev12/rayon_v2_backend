@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { resolveActiveStoreId } from "@/lib/auth/session";
+import { resolveRequestStoreId } from "@/lib/auth/store";
 import { expenseSchema } from "@/lib/validations/expense";
 import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
 import { getPagination, paginationMeta } from "@/lib/api/pagination";
@@ -34,7 +35,7 @@ export async function createExpense(req: Request, res: Response) {
 
   const parsed = expenseSchema.parse(req.body);
   if (parsed.organisationnelle && context.role !== Role.OWNER && context.role !== Role.ADMIN) throw Errors.forbidden("Seul un propriétaire ou administrateur peut créer une charge organisationnelle.");
-  const storeId = parsed.organisationnelle ? null : parsed.boutiqueId ? await resolveActiveStoreId(context, parsed.boutiqueId) : await resolveActiveStoreId(context);
+  const storeId = parsed.organisationnelle ? null : await resolveRequestStoreId(context, parsed.boutiqueId);
 
   const expense = await prisma.depense.create({
     data: {

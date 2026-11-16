@@ -320,6 +320,7 @@ export async function getNewSalePage(req: Request, res: Response) {
     products: catalog,
     customers,
     currency: organization.devise,
+    storeId,
     /** Plafond de remise du rôle (null : sans limite) et droit de vendre sous le coût. */
     pricing,
     quote: quote && {

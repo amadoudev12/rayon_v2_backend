@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import * as quoteService from "@/services/quote";
 import { prisma } from "@/lib/prisma";
 import { resolveActiveStoreId } from "@/lib/auth/session";
+import { resolveRequestStoreId } from "@/lib/auth/store";
 import { quoteSchema } from "@/lib/validations/quote";
 import { jsonData, jsonMessage, jsonPage, routeId, searchParams } from "@/lib/api/response";
 import { getPagination, paginationMeta } from "@/lib/api/pagination";
@@ -33,7 +34,7 @@ export async function createQuote(req: Request, res: Response) {
   const context = req.user;
 
   const parsed = quoteSchema.parse(req.body);
-  const storeId = await resolveActiveStoreId(context, parsed.boutiqueId);
+  const storeId = await resolveRequestStoreId(context, parsed.boutiqueId);
 
   const quote = await quoteService.createQuote(context, storeId, parsed);
   return jsonData(res, quote, { status: 201 });

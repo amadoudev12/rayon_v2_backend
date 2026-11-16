@@ -6,6 +6,7 @@ import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
 import { prisma } from "@/lib/prisma";
 import { containsText } from "@/lib/search";
 import { resolveActiveStoreId } from "@/lib/auth/session";
+import { resolveRequestStoreId } from "@/lib/auth/store";
 import { can } from "@/lib/auth/permissions";
 import { parsePeriod } from "@/lib/period";
 import { cancellationSchema, refundPayoutSchema, salePaymentSchema, saleReturnSchema, saleSchema } from "@/lib/validations/sale";
@@ -64,7 +65,7 @@ export async function createSale(req: Request, res: Response) {
   const context = req.user;
 
   const parsed = saleSchema.parse(req.body);
-  const storeId = await resolveActiveStoreId(context, parsed.boutiqueId);
+  const storeId = await resolveRequestStoreId(context, parsed.boutiqueId);
 
   const sale = await saleService.createSale(context, storeId, parsed, requireIdempotencyKey(req), await pricePolicyFor(context));
   return jsonData(res, serializeSale(sale, canViewCosts(req)), { status: 201 });

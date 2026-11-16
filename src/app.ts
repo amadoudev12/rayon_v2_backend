@@ -20,6 +20,7 @@ import productRoutes from "@/routes/product.routes";
 import purchaseRoutes from "@/routes/purchase.routes";
 import quoteRoutes from "@/routes/quote.routes";
 import saleRoutes from "@/routes/sale.routes";
+import heldSaleRoutes from "@/routes/held-sale.routes";
 import stockRoutes from "@/routes/stock.routes";
 import inventoryRoutes from "@/routes/inventory.routes";
 import lossRoutes from "@/routes/loss.routes";
@@ -73,6 +74,7 @@ export function createApp() {
   app.use("/api/losses", lossRoutes);
   app.use("/api/dashboard", dashboardRoutes);
   app.use("/api/sales", saleRoutes);
+  app.use("/api/held-sales", heldSaleRoutes);
   app.use("/api/purchases", purchaseRoutes);
   app.use("/api/quotes", quoteRoutes);
   app.use("/api/customers", customerRoutes);

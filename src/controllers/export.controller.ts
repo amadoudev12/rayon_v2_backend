@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { can } from "@/lib/auth/permissions";
-import { resolveActiveStoreId } from "@/lib/auth/session";
+import { resolveRequestStoreId } from "@/lib/auth/store";
 import { parsePeriod } from "@/lib/period";
 import { searchParams } from "@/lib/api/response";
 import { startCsv } from "@/lib/csv";
@@ -16,7 +16,8 @@ const BATCH = 1_000;
 
 async function context(req: Request) {
   const params = searchParams(req);
-  const storeId = await resolveActiveStoreId(req.user, Number(params.get("storeId")) || undefined);
+  // Boutique du sélecteur du site (cookie), ou celle demandée explicitement.
+  const storeId = await resolveRequestStoreId(req.user, Number(params.get("storeId")) || undefined);
   const organization = await prisma.organisation.findUniqueOrThrow({ where: { id: req.user.organizationId }, select: { fuseauHoraire: true } });
   return { params, storeId, timeZone: organization.fuseauHoraire };
 }
