@@ -1,3 +1,4 @@
+import { onboardingSchema } from "@/lib/validations/onboarding";
 import { describe, expect, it } from "vitest";
 import { saleSchema } from "@/lib/validations/sale";
 import { purchaseSchema } from "@/lib/validations/purchase";
@@ -58,5 +59,20 @@ describe("validations des données envoyées aux API", () => {
     const base = { prenom: "Awa", nom: "Diallo", motDePasse: "Solide123" };
     expect(registerSchema.safeParse({ ...base, identifiant: "+221 77 123 45 67" }).success).toBe(true);
     expect(registerSchema.safeParse({ ...base, identifiant: "pas un identifiant" }).success).toBe(false);
+  });
+});
+
+describe("inscription d'une boutique : téléphone obligatoire", () => {
+  const base = { nomOrganisation: "Chez Awa", nomBoutique: "Marché central" };
+
+  it("refuse un téléphone absent, vide ou sans indicatif", () => {
+    expect(onboardingSchema.safeParse(base).success).toBe(false);
+    expect(onboardingSchema.safeParse({ ...base, telephoneBoutique: "  " }).success).toBe(false);
+    expect(onboardingSchema.safeParse({ ...base, telephoneBoutique: "07 07 05 75 65" }).success).toBe(false);
+  });
+
+  it("enregistre le numéro sous sa forme canonique", () => {
+    expect(onboardingSchema.parse({ ...base, telephoneBoutique: "+225 07 07 05 75 65" }).telephoneBoutique).toBe("+2250707057565");
+    expect(onboardingSchema.parse({ ...base, telephoneBoutique: "00225.07.07.05.75.65" }).telephoneBoutique).toBe("+2250707057565");
   });
 });
