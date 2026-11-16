@@ -37,7 +37,7 @@ export async function getAdminHomePage(req: Request, res: Response) {
 
   const [user, overview, alerts, activity] = await Promise.all([
     prisma.utilisateur.findUniqueOrThrow({ where: { id: admin.userId }, select: { prenom: true } }),
-    platformService.getPlatformOverview({ range, currency: params.get("currency") ?? undefined }),
+    platformService.getPlatformOverview({ range }),
     platformService.getPlatformAlerts(),
     platformService.getPlatformActivity({ limit: 8 }),
   ]);
@@ -83,13 +83,8 @@ export async function getAdminUsersPage(req: Request, res: Response) {
   });
 }
 
-export async function getAdminStatisticsPage(req: Request, res: Response) {
-  const params = searchParams(req);
-  const range = platformService.parseRange(params.get("range"));
-
-  const analytics = await platformService.getPlatformAnalytics({ range, currency: params.get("currency") ?? undefined });
-
-  return jsonData(res, { range, analytics });
+export async function getAdminStatisticsPage(_req: Request, res: Response) {
+  return jsonData(res, { analytics: await platformService.getPlatformAnalytics() });
 }
 
 export async function getAdminActivityPage(req: Request, res: Response) {

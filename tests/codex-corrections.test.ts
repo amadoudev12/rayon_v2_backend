@@ -1,8 +1,7 @@
 /**
  * Corrections du code laissé par Codex : ajustement de stock idempotent,
  * pertes (motifs, audit, annulabilité, rapport exact), valorisation exacte,
- * export complet des mouvements, booléen strict des dépenses et CA net du
- * super administrateur.
+ * export complet des mouvements et booléen strict des dépenses.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
@@ -20,11 +19,7 @@ import { createApp } from "@/app";
 import { adjustStock } from "@/services/stock";
 import { cancelLoss, createLoss, getLossReport, listLosses } from "@/services/loss";
 import { countInventoryLine, createInventory, validateInventory } from "@/services/inventory";
-import { createSale } from "@/services/sale";
-import { createSaleReturn } from "@/services/sale-return";
 import { getFinancialSummary } from "@/services/finance";
-import { getOrganizationDetails, listOrganizations } from "@/services/platform-admin";
-import { getPlatformOverview } from "@/services/platform";
 import { expenseSchema } from "@/lib/validations/expense";
 import { parsePeriod } from "@/lib/period";
 import { createMember, createProduit, createShop, resetDatabase, stockOf, testKey } from "./helpers/factories";
@@ -280,33 +275,6 @@ describe("dépenses : charge organisationnelle", () => {
     expect(expenseSchema.parse({ ...base, organisationnelle: false }).organisationnelle).toBe(false);
     expect(expenseSchema.parse(base).organisationnelle).toBe(false);
     expect(() => expenseSchema.parse({ ...base, organisationnelle: "oui" })).toThrow();
-  });
-});
-
-describe("super administrateur : chiffre d'affaires net", () => {
-  it("déduit les retours, comme le tableau de bord de la boutique", async () => {
-    const shop = await createShop();
-    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixAchat: 600, prixVente: 1000, stock: 10 });
-    const sale = await createSale(shop.context, shop.boutique.id, { lignes: [{ produitId: produit.id, quantite: 3 }], modePaiement: "CASH", remise: 0 }, testKey("sale"));
-    await createSaleReturn(
-      shop.context,
-      sale.id,
-      { motif: "Retour", lignes: [{ ligneVenteId: sale.lignes[0]!.id, quantite: 1, remiseEnStock: true }] },
-      testKey("return"),
-    );
-
-    const list = await listOrganizations({ sort: "revenue", order: "desc", pagination: { page: 1, limit: 10 } });
-    expect(list.items[0]!.revenue).toBe(2000);
-
-    const details = await getOrganizationDetails(shop.organisation.id);
-    expect(details!.revenue).toMatchObject({ allTime: 2000, month: 2000, averageBasket: 2000 });
-    expect(details!.trend.reduce((total, point) => total + point.value, 0)).toBe(2000);
-
-    const overview = await getPlatformOverview({ range: "30d" });
-    expect(overview.revenue).toMatchObject({ allTime: 2000, today: 2000, month: 2000, period: 2000 });
-
-    const dashboard = await getFinancialSummary({ organisationId: shop.organisation.id, storeId: null }, thisMonth());
-    expect(dashboard.revenue).toBe(2000);
   });
 });
 

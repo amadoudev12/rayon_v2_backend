@@ -205,87 +205,46 @@ describe("suspension d'une boutique et désactivation d'un compte", () => {
   });
 });
 
-describe("statistiques de la plateforme", () => {
-  it("additionne le CA de toutes les boutiques, sans les ventes annulées et sans mélanger les devises", async () => {
+/**
+ * Le super administrateur ne doit voir AUCUNE donnée commerciale : ni clés
+ * (revenue, sales, total…) ni montants. Un montant de vente « signature »
+ * (ex : 7 777) ne doit apparaître nulle part dans ce qui lui est renvoyé.
+ */
+const COMMERCIAL_KEYS = /"(revenue|sales|total|amount|averageBasket|paymentMethods|topProducts|topOrganizations|recentSales|recentProducts|products|customers|purchases|suppliers|counts|trend|series|prixVente|devise)"/;
+
+function expectNoCommercialData(payload: unknown, signatureAmounts: number[] = []) {
+  // `total` est autorisé quand c'est un nombre de comptes (organisations, utilisateurs) : on le retire avant le contrôle.
+  const json = JSON.stringify(payload, (key, value) =>
+    key === "total" && (typeof value === "number" || typeof value === "object") ? undefined : value,
+  );
+  expect(json).not.toMatch(COMMERCIAL_KEYS);
+  for (const amount of signatureAmounts) expect(json).not.toContain(String(amount));
+}
+
+describe("supervision de la plateforme sans données commerciales", () => {
+  it("la vue d'ensemble compte boutiques et utilisateurs, sans chiffre d'affaires ni vente", async () => {
     const a = await createShop("Alpha");
     const b = await createShop("Bêta");
-    const euro = await createShop("Gamma");
-    await prisma.organisation.update({ where: { id: euro.organisation.id }, data: { devise: "EUR" } });
-
-    const pa = await createProduit(a.organisation.id, a.boutique.id, { prixVente: 1000, stock: 50 });
-    const pb = await createProduit(b.organisation.id, b.boutique.id, { prixVente: 2000, stock: 50 });
-    const pe = await createProduit(euro.organisation.id, euro.boutique.id, { prixVente: 10, stock: 50 });
-
-    await sell(a, pa.id, 3, 500); // 2 500 XOF
-    await sell(b, pb.id, 2); // 4 000 XOF
-    await sell(b, pb.id, 1); // 2 000 XOF
-    await sell(euro, pe.id, 4); // 40 EUR : jamais additionné aux XOF
-    await cancel(a.context, (await sell(a, pa.id, 10)).id); // annulée : ignorée
+    const pa = await createProduit(a.organisation.id, a.boutique.id, { prixVente: 7777, stock: 50 });
+    await sell(a, pa.id, 3);
+    await createProduit(b.organisation.id, b.boutique.id, { prixVente: 8888, stock: 50 });
 
     const overview = await getPlatformOverview({ range: "30d" });
 
-    expect(overview.currency).toBe("XOF");
-    expect(overview.currencies).toEqual(["XOF", "EUR"]);
-    expect(overview.revenue.allTime).toBe(8500);
-    expect(overview.revenue.period).toBe(8500);
-    expect(overview.revenue.today).toBe(8500);
-    expect(overview.revenue.month).toBe(8500);
-    expect(overview.revenue.periodChange).toBeNull();
-    expect(overview.sales).toMatchObject({ allTime: 4, today: 4, period: 4 }); // toutes devises
-    expect(overview.organizations).toMatchObject({ total: 3, suspended: 0, active: 3, inactive: 0, created: 3 });
-    expect(overview.users.total).toBe(3);
-    expect(overview.products).toBe(3);
-    expect(overview.stores).toBe(3);
-
-    // La série couvre 30 jours et son total retombe sur le CA de la période.
-    expect(overview.series).toHaveLength(30);
-    expect(overview.series.reduce((total, point) => total + point.value, 0)).toBe(8500);
-    expect(overview.series.reduce((total, point) => total + point.count, 0)).toBe(4);
-    expect(overview.series.at(-1)).toMatchObject({ value: 8500, count: 4 });
-
-    expect(overview.topOrganizations.map((row) => [row.name, row.sales, row.revenue])).toEqual([
-      ["Bêta", 2, 6000],
-      ["Alpha", 1, 2500],
-      ["Gamma", 1, 40],
-    ]);
-    expect(overview.topProducts[0]).toMatchObject({ quantity: 4, organization: "Gamma", currency: "EUR" });
-
-    const inEuro = await getPlatformOverview({ range: "today", currency: "EUR" });
-    expect(inEuro.revenue.allTime).toBe(40);
-    expect(inEuro.series).toHaveLength(24);
-    expect(inEuro.series.reduce((total, point) => total + point.value, 0)).toBe(40);
-
-    // Une devise inconnue retombe sur la devise principale.
-    expect((await getPlatformOverview({ currency: "ZZZ" })).currency).toBe("XOF");
+    expect(overview.organizations).toMatchObject({ total: 2, suspended: 0, created: 2 });
+    expect(overview.users.total).toBe(2);
+    expect(overview.stores).toBe(2);
+    // Classement par dernière activité : la boutique qui a travaillé d'abord, avec une date seulement.
+    expect(overview.recentlyActive[0]).toMatchObject({ name: "Alpha", status: "active" });
+    expect(overview.recentlyActive[0].lastActivity).toBeInstanceOf(Date);
+    expectNoCommercialData(overview, [7777, 23331, 8888]);
   });
 
-  it("compare la période à la précédente et classe hors période les ventes anciennes", async () => {
-    const shop = await createShop();
-    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1000, stock: 50 });
-    await sell(shop, produit.id, 3); // 3 000 aujourd'hui
-
-    const previous = await sell(shop, produit.id, 2); // 2 000, il y a 10 jours
-    await prisma.vente.update({ where: { id: previous.id }, data: { creeLe: new Date(Date.now() - 10 * DAY_MS) } });
-    const old = await sell(shop, produit.id, 1); // 1 000, il y a 200 jours
-    await prisma.vente.update({ where: { id: old.id }, data: { creeLe: new Date(Date.now() - 200 * DAY_MS) } });
-
-    const week = await getPlatformOverview({ range: "7d" });
-    expect(week.revenue.period).toBe(3000);
-    expect(week.revenue.periodChange).toBeCloseTo(50, 5); // 3 000 contre 2 000 les 7 jours d'avant
-    expect(week.revenue.allTime).toBe(6000);
-    expect(week.sales.period).toBe(1);
-    expect(week.series).toHaveLength(7);
-
-    const quarter = await getPlatformOverview({ range: "90d" });
-    expect(quarter.revenue.period).toBe(5000);
-    expect(quarter.series).toHaveLength(90);
-  });
-
-  it("distingue boutiques actives, inactives et suspendues, et signale ce qui demande attention", async () => {
+  it("distingue boutiques actives, inactives, jamais utilisées et suspendues", async () => {
     const admin = await createSuperAdmin();
     const active = await createShop("Active");
     const sleeping = await createShop("Endormie");
-    const empty = await createShop("Sans vente");
+    const never = await createShop("Jamais utilisée");
     const suspended = await createShop("Suspendue");
 
     const p1 = await createProduit(active.organisation.id, active.boutique.id, { stock: 50 });
@@ -293,88 +252,65 @@ describe("statistiques de la plateforme", () => {
     const p2 = await createProduit(sleeping.organisation.id, sleeping.boutique.id, { stock: 50 });
     const oldSale = await sell(sleeping, p2.id, 1);
     await prisma.vente.update({ where: { id: oldSale.id }, data: { creeLe: new Date(Date.now() - 45 * DAY_MS) } });
-    await prisma.organisation.update({
-      where: { id: empty.organisation.id },
-      data: { creeLe: new Date(Date.now() - 20 * DAY_MS) },
-    });
+    await prisma.organisation.update({ where: { id: never.organisation.id }, data: { creeLe: new Date(Date.now() - 20 * DAY_MS) } });
     await setOrganizationActive(admin.id, suspended.organisation.id, false);
     await prisma.utilisateur.create({
-      data: {
-        prenom: "Sans",
-        nom: "Boutique",
-        email: "attente@test.local",
-        motDePasseHash: "x",
-        creeLe: new Date(Date.now() - 3 * DAY_MS),
-      },
+      data: { prenom: "Sans", nom: "Boutique", email: "attente@test.local", motDePasseHash: "x", creeLe: new Date(Date.now() - 3 * DAY_MS) },
     });
 
     const overview = await getPlatformOverview();
     expect(overview.organizations).toMatchObject({ total: 4, active: 1, inactive: 2, suspended: 1 });
 
     const alerts = Object.fromEntries((await getPlatformAlerts()).map((alert) => [alert.key, alert.count]));
-    expect(alerts).toEqual({ inactive: 1, noSales: 1, onboarding: 1, suspended: 1 });
+    expect(alerts).toEqual({ inactive: 1, neverUsed: 1, onboarding: 1, suspended: 1 });
 
-    const names = async (status: "active" | "inactive" | "suspended" | "nosales") =>
+    const names = async (status: "active" | "inactive" | "suspended" | "never") =>
       (await listOrganizations({ status, sort: "nom", order: "asc", pagination: page })).items.map((item) => item.nom);
     expect(await names("active")).toEqual(["Active"]);
-    expect(await names("inactive")).toEqual(["Endormie", "Sans vente"]);
+    expect(await names("inactive")).toEqual(["Endormie", "Jamais utilisée"]);
     expect(await names("suspended")).toEqual(["Suspendue"]);
-    expect(await names("nosales")).toEqual(["Sans vente", "Suspendue"]);
+    expect(await names("never")).toEqual(["Jamais utilisée", "Suspendue"]);
   });
 
-  it("calcule les statistiques détaillées : paiements, annulations, classement, inscriptions", async () => {
+  it("les statistiques d'usage comptent inscriptions et dernières activités, sans vente", async () => {
     const shop = await createShop("Alpha");
-    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1000, stock: 50 });
+    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 7777, stock: 50 });
     await sell(shop, produit.id, 2);
-    await createSale(shop.context, shop.boutique.id, {
-      lignes: [{ produitId: produit.id, quantite: 1 }],
-      modePaiement: "MOBILE_MONEY",
-      remise: 0,
-    });
-    await sell(shop, produit.id, 4);
     await cancel(shop.context, (await sell(shop, produit.id, 1)).id);
+    await createShop("Bêta");
 
-    const analytics = await getPlatformAnalytics({ range: "30d" });
+    const analytics = await getPlatformAnalytics();
 
-    expect(analytics.revenue.period).toBe(7000);
-    expect(analytics.revenue.averageBasket).toBeCloseTo(7000 / 3, 5);
-    expect(analytics.sales).toMatchObject({ period: 3, cancelled: 1 });
-    expect(analytics.sales.cancellationRate).toBeCloseTo(25, 5);
-    expect(analytics.paymentMethods).toEqual([
-      { method: "CASH", count: 2, revenue: 6000 },
-      { method: "MOBILE_MONEY", count: 1, revenue: 1000 },
-    ]);
-    expect(analytics.ranking).toHaveLength(1);
-    expect(analytics.ranking[0]).toMatchObject({ name: "Alpha", sales: 3, revenue: 7000, status: "active" });
     expect(analytics.signups).toHaveLength(12);
-    expect(analytics.signups.at(-1)).toEqual(expect.objectContaining({ organizations: 1, users: 1 }));
+    expect(analytics.signups.at(-1)).toEqual(expect.objectContaining({ organizations: 2, users: 2 }));
+    expect(analytics.organizationActivity).toEqual({ today: 1, week: 0, month: 0, older: 0, never: 1 });
+    expect(analytics.userActivity.never + analytics.userActivity.today).toBe(2);
+    expectNoCommercialData(analytics, [7777, 15554]);
   });
 });
 
 describe("gestion des boutiques et des utilisateurs", () => {
-  it("liste les boutiques avec propriétaire, compteurs, CA, recherche, tri et pagination", async () => {
+  it("liste les boutiques avec propriétaire, membres, dernière activité, recherche, tri et pagination", async () => {
     const a = await createShop("Alpha Market");
-    const b = await createShop("Bêta Shop");
+    await createShop("Bêta Shop");
     await createMember(a.organisation.id, Role.SELLER);
-    const pa = await createProduit(a.organisation.id, a.boutique.id, { prixVente: 1000, stock: 50 });
-    await createProduit(a.organisation.id, a.boutique.id);
-    const pb = await createProduit(b.organisation.id, b.boutique.id, { prixVente: 5000, stock: 50 });
+    const pa = await createProduit(a.organisation.id, a.boutique.id, { prixVente: 7777, stock: 50 });
     await sell(a, pa.id, 2);
-    await sell(a, pa.id, 1);
-    await sell(b, pb.id, 1);
-    await cancel(b.context, (await sell(b, pb.id, 9)).id);
 
-    const byRevenue = await listOrganizations({ sort: "revenue", order: "desc", pagination: page });
-    expect(byRevenue.total).toBe(2);
-    expect(byRevenue.items.map((item) => [item.nom, item.sales, item.revenue, item.products, item.members])).toEqual([
-      ["Bêta Shop", 1, 5000, 1, 1],
-      ["Alpha Market", 2, 3000, 2, 2],
+    const byMembers = await listOrganizations({ sort: "members", order: "desc", pagination: page });
+    expect(byMembers.total).toBe(2);
+    expect(byMembers.items.map((item) => [item.nom, item.members, item.stores])).toEqual([
+      ["Alpha Market", 2, 1],
+      ["Bêta Shop", 1, 1],
     ]);
-    expect(byRevenue.items[1].owner?.email).toBe(a.owner.utilisateur.email);
-    expect(byRevenue.items[0].status).toBe("active");
+    expect(byMembers.items[0].owner?.email).toBe(a.owner.utilisateur.email);
+    expect(byMembers.items[0].status).toBe("active");
+    expect(byMembers.items[0].lastActivity).toBeInstanceOf(Date);
+    expect(byMembers.items[1].lastActivity).toBeNull();
+    expectNoCommercialData(byMembers.items, [7777, 15554]);
 
-    const bySales = await listOrganizations({ sort: "sales", order: "desc", pagination: page });
-    expect(bySales.items[0].nom).toBe("Alpha Market");
+    const byActivity = await listOrganizations({ sort: "lastActivity", order: "desc", pagination: page });
+    expect(byActivity.items[0].nom).toBe("Alpha Market");
 
     const search = await listOrganizations({ search: "bêta", pagination: page });
     expect(search.items.map((item) => item.nom)).toEqual(["Bêta Shop"]);
@@ -388,27 +324,40 @@ describe("gestion des boutiques et des utilisateurs", () => {
     expect(second.items.map((item) => item.nom)).toEqual(["Bêta Shop"]);
   });
 
-  it("donne le détail d'une boutique sans rien exposer des autres", async () => {
+  it("donne la fiche d'une boutique sans aucune donnée commerciale ni rien des autres", async () => {
     const a = await createShop("Alpha");
     const b = await createShop("Bêta");
-    const pa = await createProduit(a.organisation.id, a.boutique.id, { nom: "Riz", prixVente: 1000, stock: 50 });
+    const pa = await createProduit(a.organisation.id, a.boutique.id, { nom: "Riz parfumé", prixVente: 7777, stock: 50 });
     const pb = await createProduit(b.organisation.id, b.boutique.id, { nom: "Eau", prixVente: 400, stock: 50 });
-    await sell(a, pa.id, 3, 500);
+    await sell(a, pa.id, 3);
     await sell(b, pb.id, 9);
 
     const details = await getOrganizationDetails(a.organisation.id);
 
     expect(details).not.toBeNull();
     expect(details!.owner?.email).toBe(a.owner.utilisateur.email);
-    expect(details!.counts).toMatchObject({ products: 1, sales: 1, cancelledSales: 0 });
-    expect(details!.revenue).toMatchObject({ allTime: 2500, month: 2500, averageBasket: 2500 });
-    expect(details!.trend).toHaveLength(30);
-    expect(details!.trend.at(-1)).toMatchObject({ value: 2500, count: 1 });
-    expect(details!.topProducts.map((product) => product.nom)).toEqual(["Riz"]);
-    expect(details!.recentSales).toHaveLength(1);
+    expect(details!.status).toBe("active");
+    expect(details!.lastActivity).toBeInstanceOf(Date);
+    expect(details!.stores).toEqual([expect.objectContaining({ id: a.boutique.id, members: 0 })]);
     expect(details!.activity.every((event) => event.organization?.id === a.organisation.id)).toBe(true);
+    expectNoCommercialData(details, [7777, 23331]);
+    expect(JSON.stringify(details)).not.toContain("Riz parfumé");
     expect(JSON.stringify(details)).not.toContain("motDePasseHash");
     expect(await getOrganizationDetails(9999)).toBeNull();
+  });
+
+  it("l'API d'administration ne renvoie aucune donnée commerciale", async () => {
+    const admin = await createSuperAdmin();
+    signIn(admin.id);
+    const shop = await createShop("Alpha");
+    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 7777, stock: 50 });
+    await sell(shop, produit.id, 1);
+
+    for (const path of ["/api/admin/overview", "/api/admin/analytics", "/api/admin/organizations", `/api/admin/organizations/${shop.organisation.id}`, "/api/admin/activity"]) {
+      const response = await api.get(path);
+      expect(response.status, path).toBe(200);
+      expectNoCommercialData(response.body, [7777]);
+    }
   });
 
   it("crée une boutique avec son propriétaire, et refuse un email déjà pris", async () => {
@@ -509,10 +458,10 @@ describe("gestion des boutiques et des utilisateurs", () => {
 });
 
 describe("activité récente de la plateforme", () => {
-  it("fusionne les événements réels, les filtre par type et les pagine par curseur", async () => {
+  it("montre comptes et administration, jamais les ventes ni les produits, et pagine par curseur", async () => {
     const admin = await createSuperAdmin();
     const shop = await createShop("Alpha");
-    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { nom: "Riz", stock: 50 });
+    const produit = await createProduit(shop.organisation.id, shop.boutique.id, { nom: "Riz parfumé", prixVente: 7777, stock: 50 });
     const sale = await sell(shop, produit.id, 1);
     await cancel(shop.context, sale.id);
     await setOrganizationActive(admin.id, shop.organisation.id, false);
@@ -520,24 +469,18 @@ describe("activité récente de la plateforme", () => {
     const { events } = await getPlatformActivity({ limit: 20 });
 
     expect(events.map((event) => event.title).sort()).toEqual(
-      [
-        "Boutique suspendue",
-        "Nouvel utilisateur inscrit",
-        "Nouvelle boutique créée",
-        "Produit ajouté",
-        `Vente #${String(sale.id).padStart(5, "0")} annulée`,
-        `Vente #${String(sale.id).padStart(5, "0")} enregistrée`,
-      ].sort(),
+      ["Boutique suspendue", "Nouvel utilisateur inscrit", "Nouvelle boutique créée"].sort(),
     );
+    expectNoCommercialData(events, [7777]);
+    expect(JSON.stringify(events)).not.toContain("Riz parfumé");
     // Du plus récent au plus ancien ; le super administrateur n'apparaît pas comme « inscrit ».
     expect(events.map((event) => event.date.getTime())).toEqual(
       [...events].map((event) => event.date.getTime()).sort((x, y) => y - x),
     );
     expect(new Set(events.map((event) => event.id)).size).toBe(events.length);
 
-    const onlySales = await getPlatformActivity({ kind: "sale" });
-    expect(onlySales.events.every((event) => event.kind === "sale")).toBe(true);
-    expect(onlySales.events).toHaveLength(2);
+    const onlyAdmin = await getPlatformActivity({ kind: "admin" });
+    expect(onlyAdmin.events.map((event) => event.kind)).toEqual(["admin"]);
 
     const first = await getPlatformActivity({ limit: 2 });
     expect(first.events).toHaveLength(2);

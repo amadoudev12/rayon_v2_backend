@@ -13,25 +13,16 @@ export async function getOverview(req: Request, res: Response) {
   const params = searchParams(req);
 
   const [overview, alerts] = await Promise.all([
-    platformService.getPlatformOverview({
-      range: platformService.parseRange(params.get("range")),
-      currency: params.get("currency") ?? undefined,
-    }),
+    platformService.getPlatformOverview({ range: platformService.parseRange(params.get("range")) }),
     platformService.getPlatformAlerts(),
   ]);
 
   return jsonData(res, { ...overview, alerts });
 }
 
-export async function getAnalytics(req: Request, res: Response) {
-  const params = searchParams(req);
-
-  const analytics = await platformService.getPlatformAnalytics({
-    range: platformService.parseRange(params.get("range")),
-    currency: params.get("currency") ?? undefined,
-  });
-
-  return jsonData(res, analytics);
+/** Statistiques d'usage (inscriptions, ancienneté de la dernière activité). */
+export async function getAnalytics(_req: Request, res: Response) {
+  return jsonData(res, await platformService.getPlatformAnalytics());
 }
 
 export async function getActivity(req: Request, res: Response) {

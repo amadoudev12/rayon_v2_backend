@@ -1,14 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
-import { Role, SaleStatus } from "@/generated/prisma/enums";
+import { Role } from "@/generated/prisma/enums";
 import { Errors } from "@/lib/api/errors";
 import { recordAuditLog } from "@/lib/api/audit";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { identifierTakenMessage, identifierWhere, parseIdentifier } from "@/lib/auth/identifier";
 import { containsText } from "@/lib/search";
 import { slugify } from "@/lib/slug";
-import { toNumber } from "@/lib/money";
-import { getNetRevenue } from "@/services/finance";
 import { getPagination, getSort, type Pagination } from "@/lib/api/pagination";
 import type { AdminCreateOrganizationData, AdminProfileData } from "@/lib/validations/admin";
 import {
@@ -31,26 +29,23 @@ const DAY_MS = 86_400_000;
 // Liste des boutiques
 // ---------------------------------------------------------------------------
 
-export const ORGANIZATION_STATUS_FILTERS = ["active", "inactive", "suspended", "nosales"] as const;
+export const ORGANIZATION_STATUS_FILTERS = ["active", "inactive", "suspended", "never"] as const;
 export type OrganizationStatusFilter = (typeof ORGANIZATION_STATUS_FILTERS)[number];
 
-export const ORGANIZATION_SORT_FIELDS = ["nom", "creeLe", "products", "sales", "revenue", "lastActivity"] as const;
+export const ORGANIZATION_SORT_FIELDS = ["nom", "creeLe", "members", "lastActivity"] as const;
 export type OrganizationSort = (typeof ORGANIZATION_SORT_FIELDS)[number];
 
 /** Colonnes SQL triables : liste fermée, jamais construite à partir d'une saisie. */
 const ORGANIZATION_SORT_SQL: Record<OrganizationSort, string> = {
   nom: 'LOWER(o."nom")',
   creeLe: 'o."creeLe"',
-  products: '"products"',
-  sales: 's."sales"',
-  revenue: 's."revenue"',
+  members: '"members"',
   lastActivity: 'a."lastActivity"',
 };
 
 type OrganizationRow = {
   id: number;
   nom: string;
-  devise: string;
   actif: boolean;
   creeLe: Date;
   ownerFirstName: string | null;
@@ -59,14 +54,12 @@ type OrganizationRow = {
   ownerPhone: string | null;
   stores: number;
   members: number;
-  products: number;
-  sales: number;
-  revenue: number;
   lastActivity: Date | null;
 };
 
 export type OrganizationListItem = Awaited<ReturnType<typeof listOrganizations>>["items"][number];
 
+/** Liste des boutiques : comptes, statut et date de dernière activité (aucune donnée commerciale). */
 export async function listOrganizations(options: {
   search?: string;
   status?: OrganizationStatusFilter;
@@ -93,7 +86,7 @@ export async function listOrganizations(options: {
   if (options.status === "inactive") {
     conditions.push(Prisma.sql`o."actif" AND (a."lastActivity" IS NULL OR a."lastActivity" < ${inactiveSince})`);
   }
-  if (options.status === "nosales") conditions.push(Prisma.sql`s."sales" = 0`);
+  if (options.status === "never") conditions.push(Prisma.sql`a."lastActivity" IS NULL`);
 
   const from = Prisma.sql`
     FROM "Organisation" o
@@ -103,13 +96,6 @@ export async function listOrganizations(options: {
       WHERE m."organisationId" = o."id" AND m."role" = 'OWNER'
       ORDER BY m."id" LIMIT 1
     ) owner ON TRUE
-    LEFT JOIN LATERAL (
-      SELECT
-        (COUNT(*) FILTER (WHERE v."statut" = 'COMPLETED'))::int AS "sales",
-        -- CA net (ventes terminées − retours), même définition que finance.ts.
-        COALESCE(SUM(v."total" - v."montantRetourne") FILTER (WHERE v."statut" = 'COMPLETED'), 0)::float8 AS "revenue"
-      FROM "Vente" v WHERE v."organisationId" = o."id"
-    ) s ON TRUE
     LEFT JOIN LATERAL (SELECT ${ORGANIZATION_LAST_ACTIVITY_SQL} AS "lastActivity") a ON TRUE
     WHERE ${Prisma.join(conditions, " AND ")}
   `;
@@ -121,12 +107,11 @@ export async function listOrganizations(options: {
   const [rows, [{ total }]] = await Promise.all([
     prisma.$queryRaw<OrganizationRow[]>`
       SELECT
-        o."id", o."nom", o."devise", o."actif", o."creeLe",
+        o."id", o."nom", o."actif", o."creeLe",
         owner."prenom" AS "ownerFirstName", owner."nom" AS "ownerLastName", owner."email" AS "ownerEmail", owner."telephone" AS "ownerPhone",
         (SELECT COUNT(*) FROM "Boutique" b WHERE b."organisationId" = o."id")::int AS "stores",
         (SELECT COUNT(*) FROM "Membre" m WHERE m."organisationId" = o."id")::int AS "members",
-        (SELECT COUNT(*) FROM "Produit" p WHERE p."organisationId" = o."id")::int AS "products",
-        s."sales", s."revenue", a."lastActivity"
+        a."lastActivity"
       ${from}
       ORDER BY ${Prisma.raw(sort)} ${Prisma.raw(order)} NULLS LAST, o."id" DESC
       LIMIT ${limit} OFFSET ${(page - 1) * limit}
@@ -139,7 +124,6 @@ export async function listOrganizations(options: {
     items: rows.map((row) => ({
       id: row.id,
       nom: row.nom,
-      devise: row.devise,
       actif: row.actif,
       creeLe: row.creeLe,
       owner:
@@ -153,9 +137,6 @@ export async function listOrganizations(options: {
           : null,
       stores: row.stores,
       members: row.members,
-      products: row.products,
-      sales: row.sales,
-      revenue: row.revenue,
       lastActivity: row.lastActivity,
       status: organizationStatus(row.actif, row.lastActivity, now),
     })),
@@ -166,17 +147,15 @@ export async function listOrganizations(options: {
 // Détail d'une boutique
 // ---------------------------------------------------------------------------
 
-const TREND_DAYS = 30;
-
 export type OrganizationDetails = NonNullable<Awaited<ReturnType<typeof getOrganizationDetails>>>;
 
-/** Vue de supervision d'une organisation (lecture seule) ; null si elle n'existe pas. */
+/**
+ * Fiche de supervision d'une organisation (lecture seule) : identité,
+ * points de vente, membres, statut et date de dernière activité. Aucune
+ * donnée commerciale (ventes, produits, clients…). Null si elle n'existe pas.
+ */
 export async function getOrganizationDetails(organizationId: number) {
   const now = new Date();
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const trendStart = new Date(today.getTime() - (TREND_DAYS - 1) * DAY_MS);
-  const completed = { organisationId: organizationId, statut: SaleStatus.COMPLETED };
 
   const organization = await prisma.organisation.findUnique({
     where: { id: organizationId },
@@ -184,7 +163,6 @@ export async function getOrganizationDetails(organizationId: number) {
       id: true,
       nom: true,
       slug: true,
-      devise: true,
       actif: true,
       creeLe: true,
       boutiques: {
@@ -195,7 +173,7 @@ export async function getOrganizationDetails(organizationId: number) {
           adresse: true,
           telephone: true,
           parDefaut: true,
-          _count: { select: { ventes: true, membres: true } },
+          _count: { select: { membres: true } },
         },
       },
       membres: {
@@ -218,91 +196,23 @@ export async function getOrganizationDetails(organizationId: number) {
           },
         },
       },
-      _count: { select: { produits: true, clients: true, fournisseurs: true, achats: true } },
     },
   });
   if (!organization) return null;
 
-  const [allTime, month, cancelledCount, activeProducts, [activity], trendRows, recentSales, topProductRows, recentProducts, feed] =
-    await Promise.all([
-      prisma.vente.aggregate({ where: completed, _sum: { total: true, montantRetourne: true }, _count: true }),
-      prisma.vente.aggregate({ where: { ...completed, creeLe: { gte: monthStart } }, _sum: { total: true }, _count: true }),
-      prisma.vente.count({ where: { organisationId: organizationId, statut: SaleStatus.CANCELLED } }),
-      prisma.produit.count({ where: { organisationId: organizationId, actif: true } }),
-      prisma.$queryRaw<{ lastActivity: Date | null }[]>`
-        SELECT ${ORGANIZATION_LAST_ACTIVITY_SQL} AS "lastActivity" FROM "Organisation" o WHERE o."id" = ${organizationId}
-      `,
-      // CA net par jour : ventes du jour − retours du jour (sur des ventes terminées).
-      prisma.$queryRaw<{ bucket: string; revenue: number; count: number }[]>`
-        SELECT d."bucket", COALESCE(SUM(d."amount"), 0)::float8 AS "revenue", (SUM(d."sales"))::int AS "count"
-        FROM (
-          SELECT to_char(date_trunc('day', v."creeLe"), 'YYYY-MM-DD') AS "bucket", v."total" AS "amount", 1 AS "sales"
-          FROM "Vente" v
-          WHERE v."organisationId" = ${organizationId} AND v."statut" = 'COMPLETED' AND v."creeLe" >= ${sqlTimestamp(trendStart)}
-          UNION ALL
-          SELECT to_char(date_trunc('day', r."creeLe"), 'YYYY-MM-DD'), -r."montant", 0
-          FROM "RetourVente" r JOIN "Vente" v ON v."id" = r."venteId"
-          WHERE r."organisationId" = ${organizationId} AND v."statut" = 'COMPLETED' AND r."creeLe" >= ${sqlTimestamp(trendStart)}
-        ) d
-        GROUP BY 1
-      `,
-      prisma.vente.findMany({
-        where: { organisationId: organizationId },
-        orderBy: { creeLe: "desc" },
-        take: 8,
-        select: {
-          id: true,
-          total: true,
-          statut: true,
-          creeLe: true,
-          boutique: { select: { nom: true } },
-          vendeur: { select: { prenom: true, nom: true } },
-          client: { select: { nom: true } },
-        },
-      }),
-      prisma.ligneVente.groupBy({
-        by: ["produitId"],
-        where: { vente: completed },
-        _sum: { quantite: true, sousTotal: true },
-        orderBy: { _sum: { quantite: "desc" } },
-        take: 5,
-      }),
-      prisma.produit.findMany({
-        where: { organisationId: organizationId },
-        orderBy: { creeLe: "desc" },
-        take: 6,
-        select: { id: true, nom: true, prixVente: true, actif: true, creeLe: true, categorie: { select: { nom: true } } },
-      }),
-      getPlatformActivity({ organizationId, limit: 8 }),
-    ]);
+  const [[activity], feed] = await Promise.all([
+    prisma.$queryRaw<{ lastActivity: Date | null }[]>`
+      SELECT ${ORGANIZATION_LAST_ACTIVITY_SQL} AS "lastActivity" FROM "Organisation" o WHERE o."id" = ${organizationId}
+    `,
+    getPlatformActivity({ organizationId, limit: 8 }),
+  ]);
 
-  const topProductNames = await prisma.produit.findMany({
-    where: { id: { in: topProductRows.map((row) => row.produitId) } },
-    select: { id: true, nom: true, unite: true },
-  });
-  const namesById = new Map(topProductNames.map((product) => [product.id, product]));
-
-  const trendByDay = new Map(trendRows.map((row) => [row.bucket, row]));
-  const trend = Array.from({ length: TREND_DAYS }, (_, index) => {
-    const date = new Date(trendStart.getTime() + index * DAY_MS);
-    const row = trendByDay.get(date.toISOString().slice(0, 10));
-    return {
-      day: date.toLocaleDateString("fr-FR", { day: "numeric", month: "short", timeZone: "UTC" }),
-      value: row?.revenue ?? 0,
-      count: row?.count ?? 0,
-    };
-  });
-
-  // CA net : un retour réduit le chiffre d'affaires (même règle que finance.ts).
-  const revenue = toNumber((allTime._sum.total ?? new Prisma.Decimal(0)).minus(allTime._sum.montantRetourne ?? 0));
-  const monthRevenue = await getNetRevenue({ organisationId: organizationId, storeId: null }, { start: monthStart, end: new Date(now.getTime() + DAY_MS) });
   const owner = organization.membres.find((member) => member.role === Role.OWNER) ?? null;
 
   return {
     id: organization.id,
     nom: organization.nom,
     slug: organization.slug,
-    devise: organization.devise,
     actif: organization.actif,
     creeLe: organization.creeLe,
     lastActivity: activity?.lastActivity ?? null,
@@ -314,7 +224,6 @@ export async function getOrganizationDetails(organizationId: number) {
       adresse: store.adresse,
       telephone: store.telephone,
       parDefaut: store.parDefaut,
-      sales: store._count.ventes,
       members: store._count.membres,
     })),
     members: organization.membres.map((member) => ({
@@ -322,46 +231,6 @@ export async function getOrganizationDetails(organizationId: number) {
       role: member.role,
       storeName: member.boutique?.nom ?? null,
       user: member.utilisateur,
-    })),
-    counts: {
-      products: organization._count.produits,
-      activeProducts,
-      customers: organization._count.clients,
-      suppliers: organization._count.fournisseurs,
-      purchases: organization._count.achats,
-      sales: allTime._count,
-      cancelledSales: cancelledCount,
-    },
-    revenue: {
-      allTime: revenue,
-      month: monthRevenue,
-      monthSales: month._count,
-      averageBasket: allTime._count > 0 ? revenue / allTime._count : 0,
-    },
-    trend,
-    recentSales: recentSales.map((sale) => ({
-      id: sale.id,
-      total: toNumber(sale.total),
-      cancelled: sale.statut === SaleStatus.CANCELLED,
-      creeLe: sale.creeLe,
-      storeName: sale.boutique.nom,
-      seller: `${sale.vendeur.prenom} ${sale.vendeur.nom}`,
-      customer: sale.client?.nom ?? null,
-    })),
-    topProducts: topProductRows.map((row) => ({
-      id: row.produitId,
-      nom: namesById.get(row.produitId)?.nom ?? "Produit supprimé",
-      unite: namesById.get(row.produitId)?.unite ?? "",
-      quantity: row._sum.quantite ?? 0,
-      amount: toNumber(row._sum.sousTotal ?? 0),
-    })),
-    recentProducts: recentProducts.map((product) => ({
-      id: product.id,
-      nom: product.nom,
-      prixVente: toNumber(product.prixVente),
-      actif: product.actif,
-      creeLe: product.creeLe,
-      categorie: product.categorie?.nom ?? null,
     })),
     activity: feed.events,
   };
