@@ -1,47 +1,70 @@
-import type { SubscriptionPaymentInput } from "@/services/subscription";
-
 /**
- * Interface d'un prestataire de paiement d'abonnement (Mobile Money, carte).
+ * Contrat d'un prestataire de paiement en ligne (SasPay, plus tard).
  *
- * AUCUN prestataire n'est branché : leur intégration exige des identifiants
- * réels (compte marchand, clés d'API, secret de signature des notifications)
- * et un contrat. Ce fichier fixe le contrat que chaque intégration devra
- * respecter, pour que le reste de Rayon n'ait pas à changer :
+ * AUCUN prestataire n'est branché : l'intégration de SasPay exige sa
+ * documentation officielle et un compte approuvé. Rien ici ne suppose un
+ * endpoint, un paramètre ou un format de signature : chaque adaptateur
+ * traduit SA documentation vers ce contrat, sans que le reste de Rayon change.
  *
- * 1. `createCheckout` : obtient du prestataire une page ou une demande de
- *    paiement pour une organisation, une offre et une période ;
- * 2. `parseNotification` : VÉRIFIE la signature de la notification (webhook)
- *    avec le secret du prestataire, puis la traduit en paiement. Une
- *    notification non signée ou mal signée doit être rejetée ;
- * 3. le paiement est enregistré par `recordSubscriptionPayment`, idempotent
- *    sur (prestataire, référence) : une notification répétée est sans effet.
- *
- * Informations à fournir pour une intégration (ex : CinetPay, PayDunya, Wave
- * Business, Orange Money API) : identifiant marchand, clé d'API, secret de
- * signature des notifications, URL de retour, devise (XOF / GNF), pays visés.
+ * Règles imposées à tout adaptateur :
+ * - appels au prestataire uniquement depuis le backend ; identifiants lus dans
+ *   l'environnement, jamais journalisés ni renvoyés dans une erreur ;
+ * - `verifyNotification` VÉRIFIE la signature selon la documentation
+ *   officielle et lève `InvalidNotificationError` sinon ;
+ * - `fetchTransaction` interroge le prestataire : c'est le statut RÉEL qui fait
+ *   foi (une notification ou un retour navigateur n'est jamais une preuve).
  */
+
+export type ProviderStatus = "PENDING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+
 export type CheckoutRequest = {
-  organizationId: number;
-  plan: string;
+  /** Référence interne unique de la transaction Rayon. */
+  internalReference: string;
   amount: number;
   currency: string;
-  periodStart: Date;
-  periodEnd: Date;
-  /** Numéro Mobile Money ou adresse du payeur, selon le prestataire. */
-  customerContact?: string;
+  description: string;
+  organizationId: number;
 };
 
-export type CheckoutResult = { providerReference: string; redirectUrl?: string; instructions?: string };
+export type CheckoutResult = {
+  providerReference: string | null;
+  /** Page de paiement du prestataire, si le parcours en utilise une. */
+  redirectUrl?: string;
+  instructions?: string;
+};
+
+export type ProviderNotification = {
+  /** Identifiant unique de la notification (anti-rejeu). */
+  eventId: string;
+  internalReference: string;
+  providerReference: string | null;
+  status: ProviderStatus;
+  amount: number | null;
+  currency: string | null;
+  method: string | null;
+};
+
+export type ProviderTransaction = {
+  providerReference: string | null;
+  status: ProviderStatus;
+  amount: number | null;
+  currency: string | null;
+  method: string | null;
+};
+
+export class InvalidNotificationError extends Error {}
 
 export interface SubscriptionPaymentProvider {
   /** Identifiant stable, enregistré dans `PaiementAbonnement.fournisseur`. */
   readonly id: string;
   createCheckout(request: CheckoutRequest): Promise<CheckoutResult>;
-  /** Retourne null si la notification ne concerne pas un paiement (ex : test). */
-  parseNotification(rawBody: Buffer, headers: Record<string, string | undefined>): Promise<
-    (SubscriptionPaymentInput & { organizationId: number }) | null
-  >;
+  verifyNotification(rawBody: Buffer, headers: Record<string, string | string[] | undefined>): Promise<ProviderNotification>;
+  /** Statut réel d'une transaction ; null si le prestataire ne la connaît pas. */
+  fetchTransaction(internalReference: string, providerReference: string | null): Promise<ProviderTransaction | null>;
 }
+
+/** Paiement Mobile Money reçu hors ligne, confirmé par l'administration. */
+export const MANUAL_PROVIDER = "MANUEL";
 
 const providers = new Map<string, SubscriptionPaymentProvider>();
 
@@ -49,8 +72,20 @@ export function registerProvider(provider: SubscriptionPaymentProvider) {
   providers.set(provider.id, provider);
 }
 
-export function getProvider(id: string): SubscriptionPaymentProvider {
-  const provider = providers.get(id);
-  if (!provider) throw new Error(`Prestataire de paiement « ${id} » non configuré.`);
-  return provider;
+export function unregisterProvider(id: string) {
+  providers.delete(id);
+}
+
+export function findProvider(id: string): SubscriptionPaymentProvider | null {
+  return providers.get(id) ?? null;
+}
+
+/**
+ * Prestataire utilisé pour les nouveaux paiements :
+ * `SUBSCRIPTION_PAYMENT_PROVIDER` (ex : saspay, une fois intégré), sinon
+ * paiement manuel. Un prestataire configuré mais absent est une erreur de
+ * déploiement : signalée, jamais remplacée silencieusement.
+ */
+export function checkoutProviderId(): string {
+  return process.env.SUBSCRIPTION_PAYMENT_PROVIDER?.trim() || MANUAL_PROVIDER;
 }

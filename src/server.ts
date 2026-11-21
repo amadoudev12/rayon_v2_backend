@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { createApp } from "@/app";
-import {  port } from "@/env";
+import { port } from "@/env";
 import { getAuthSecret } from "@/lib/auth/token";
 import { log } from "@/lib/logger";
+import { startSubscriptionJobs } from "@/jobs/subscription-jobs";
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL est manquant. Configurez-le dans votre fichier .env avant de démarrer le serveur.");
@@ -22,10 +23,14 @@ const server = app.listen(port(), () => {
   log("info", "server.started", { port: port(), node: process.version });
 });
 
+// Maintenance des abonnements (changements de forfait échus).
+const stopSubscriptionJobs = startSubscriptionJobs();
+
 // Arrêt propre (déploiement, redémarrage) : les requêtes en cours se terminent.
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     log("info", "server.stopping", { signal });
+    stopSubscriptionJobs();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();
   });
