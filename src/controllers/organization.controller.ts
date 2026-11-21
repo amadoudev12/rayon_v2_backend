@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { jsonData } from "@/lib/api/response";
 import { recordAuditLog } from "@/lib/api/audit";
 import { isTimeZone } from "@/lib/timezone";
+import { assertFeature } from "@/services/billing/entitlements";
 
 const percent = (label: string) =>
   z.coerce.number().int(`${label} : nombre entier attendu.`).min(0, `${label} : 0 % au minimum.`).max(100, `${label} : 100 % au maximum.`);
@@ -35,6 +36,11 @@ export async function updateOrganization(req: Request, res: Response) {
     where: { id: context.organizationId },
     select: { remiseMaxVendeurPct: true, remiseMaxGerantPct: true },
   });
+  // Paramétrage avancé des remises : forfait BUSINESS (les autres réglages restent libres).
+  const discountsChanged =
+    (parsed.remiseMaxVendeurPct !== undefined && parsed.remiseMaxVendeurPct !== before.remiseMaxVendeurPct) ||
+    (parsed.remiseMaxGerantPct !== undefined && parsed.remiseMaxGerantPct !== before.remiseMaxGerantPct);
+  if (discountsChanged) await assertFeature(context.organizationId, "advanced_discounts");
 
   const organization = await prisma.organisation.update({
     where: { id: context.organizationId },

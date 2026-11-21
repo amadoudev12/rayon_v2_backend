@@ -6,7 +6,7 @@ import { getSalesStats, visibleSalesStats } from "@/services/sale-stats";
 import { prisma } from "@/lib/prisma";
 import { containsText } from "@/lib/search";
 import { resolveRequestStoreId } from "@/lib/auth/store";
-import { can } from "@/lib/auth/permissions";
+import { canViewFinance } from "@/services/billing/entitlements";
 import { parsePeriod } from "@/lib/period";
 import { cancellationSchema, refundPayoutSchema, salePaymentSchema, saleReturnSchema, saleSchema } from "@/lib/validations/sale";
 import { requireIdempotencyKey } from "@/lib/idempotency";
@@ -15,7 +15,8 @@ import { getPagination, paginationMeta } from "@/lib/api/pagination";
 import { Errors } from "@/lib/api/errors";
 import { saleSummarySelect, serializeSale, serializeSaleSummary } from "@/lib/serializers/sale";
 
-const canViewCosts = (req: Request) => can(req.user.role, "report:view");
+/** Coûts et marges : rôle autorisé et forfait incluant l'analyse des marges. */
+const canViewCosts = (req: Request) => canViewFinance(req.user);
 
 export async function getAllSales(req: Request, res: Response) {
   const context = req.user;
@@ -67,7 +68,7 @@ export async function createSale(req: Request, res: Response) {
   const storeId = await resolveRequestStoreId(context, parsed.boutiqueId);
 
   const sale = await saleService.createSale(context, storeId, parsed, requireIdempotencyKey(req), await pricePolicyFor(context));
-  return jsonData(res, serializeSale(sale, canViewCosts(req)), { status: 201 });
+  return jsonData(res, serializeSale(sale, await canViewCosts(req)), { status: 201 });
 }
 
 export async function getSaleById(req: Request, res: Response) {
@@ -78,7 +79,7 @@ export async function getSaleById(req: Request, res: Response) {
   });
   if (!sale) throw Errors.notFound("Vente introuvable");
 
-  return jsonData(res, serializeSale(sale, canViewCosts(req)));
+  return jsonData(res, serializeSale(sale, await canViewCosts(req)));
 }
 
 /** Statistiques de la boutique sur une période (`?periode=…`, voir lib/period). */
@@ -91,29 +92,29 @@ export async function getSalesStatsSummary(req: Request, res: Response) {
   const period = parsePeriod(params, new Date(), organization.fuseauHoraire);
   const stats = await getSalesStats(context, storeId, period);
 
-  return jsonData(res, { period, stats: visibleSalesStats(stats, can(context.role, "report:view")) });
+  return jsonData(res, { period, stats: visibleSalesStats(stats, await canViewFinance(context)) });
 }
 
 export async function addSalePayment(req: Request, res: Response) {
   const parsed = salePaymentSchema.parse(req.body);
   const sale = await saleService.addSalePayment(req.user, routeId(req), parsed.montant, parsed.modePaiement, requireIdempotencyKey(req));
-  return jsonData(res, serializeSale(sale, canViewCosts(req)), { status: 201 });
+  return jsonData(res, serializeSale(sale, await canViewCosts(req)), { status: 201 });
 }
 
 export async function cancelSale(req: Request, res: Response) {
   const parsed = cancellationSchema.parse(req.body ?? {});
   const sale = await saleService.cancelSale(req.user, routeId(req), parsed, requireIdempotencyKey(req));
-  return jsonData(res, serializeSale(sale, canViewCosts(req)));
+  return jsonData(res, serializeSale(sale, await canViewCosts(req)));
 }
 
 export async function returnSaleItems(req: Request, res: Response) {
   const parsed = saleReturnSchema.parse(req.body);
   const sale = await createSaleReturn(req.user, routeId(req), parsed, requireIdempotencyKey(req));
-  return jsonData(res, serializeSale(sale, canViewCosts(req)), { status: 201 });
+  return jsonData(res, serializeSale(sale, await canViewCosts(req)), { status: 201 });
 }
 
 export async function makeRefundPayout(req: Request, res: Response) {
   const parsed = refundPayoutSchema.parse(req.body);
   const sale = await saleService.payRefund(req.user, routeId(req), parsed.montant, parsed.modePaiement, requireIdempotencyKey(req));
-  return jsonData(res, serializeSale(sale, canViewCosts(req)), { status: 201 });
+  return jsonData(res, serializeSale(sale, await canViewCosts(req)), { status: 201 });
 }

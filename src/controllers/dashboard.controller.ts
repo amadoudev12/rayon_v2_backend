@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import * as dashboardService from "@/services/dashboard";
 import { resolveActiveStoreId } from "@/lib/auth/session";
 import { jsonData, searchParams } from "@/lib/api/response";
-import { can } from "@/lib/auth/permissions";
+import { canViewFinance } from "@/services/billing/entitlements";
 
 export async function getDashboard(req: Request, res: Response) {
   const context = req.user;
@@ -17,5 +17,5 @@ export async function getDashboard(req: Request, res: Response) {
       ? await resolveActiveStoreId(context, requestedStoreId)
       : null;
 
-  return jsonData(res, await dashboardService.getDashboardStats(context, storeId, can(context.role, "report:view")));
+  return jsonData(res, await dashboardService.getDashboardStats(context, storeId, await canViewFinance(context)));
 }

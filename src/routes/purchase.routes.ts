@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireFeature } from "@/services/billing/entitlements";
 import { verifyToken } from "@/middleware/verifyToken";
 import { requirePermission } from "@/middleware/requirePermission";
 import { RATE_RULES, rateLimit } from "@/lib/rate-limit";
@@ -8,12 +9,12 @@ const router = Router();
 const sensitiveRate = rateLimit(RATE_RULES.sensitive);
 
 router.get("/", verifyToken, requirePermission("purchase:manage"), getAllPurchases);
-router.post("/", verifyToken, requirePermission("purchase:manage"), sensitiveRate, createPurchase);
+router.post("/", verifyToken, requirePermission("purchase:manage"), requireFeature("purchases"), sensitiveRate, createPurchase);
 // Même règle que la page Achats : les coûts d'achat ne sont pas visibles des vendeurs.
 router.get("/:id", verifyToken, requirePermission("purchase:manage"), getPurchaseById);
 // Règlement d'une dette fournisseur.
-router.post("/:id/payments", verifyToken, requirePermission("purchase:manage"), sensitiveRate, addSupplierPayment);
+router.post("/:id/payments", verifyToken, requirePermission("purchase:manage"), requireFeature("purchases"), sensitiveRate, addSupplierPayment);
 // Annulation (contre-mouvements de stock) : réservée aux responsables.
-router.post("/:id/cancel", verifyToken, requirePermission("purchase:cancel"), sensitiveRate, cancelPurchase);
+router.post("/:id/cancel", verifyToken, requirePermission("purchase:cancel"), requireFeature("purchases"), sensitiveRate, cancelPurchase);
 
 export default router;

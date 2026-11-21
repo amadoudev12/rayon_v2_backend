@@ -1,4 +1,7 @@
 import { Router } from "express";
+import { getAdminAuditPage, getAdminPaymentsPage, getAdminSubscriptionsPage } from "@/controllers/adminBilling.controller";
+import { getSubscriptionPage } from "@/controllers/billing.controller";
+import { requireFeature } from "@/services/billing/entitlements";
 import { verifyPageToken } from "@/middleware/verifyToken";
 import { requirePageSuperAdmin } from "@/middleware/requireSuperAdmin";
 import { requirePermission } from "@/middleware/requirePermission";
@@ -61,7 +64,7 @@ router.get("/stock", verifyPageToken, getStockPage);
 router.get("/stock/mouvements", verifyPageToken, requirePermission("stock-movement:read"), getStockMovementsPage);
 router.get("/stock/pertes", verifyPageToken, requirePermission("loss:read"), getLossesPage);
 router.get("/stock/controle", verifyPageToken, requirePermission("stock:report"), getStockControlPage);
-router.get("/stock/rapports", verifyPageToken, requirePermission("stock:report"), getStockReportsPage);
+router.get("/stock/rapports", verifyPageToken, requirePermission("stock:report"), requireFeature("advanced_stock"), getStockReportsPage);
 router.get("/ventes", verifyPageToken, getSalesPage);
 router.get("/ventes/nouvelle", verifyPageToken, getNewSalePage);
 router.get("/creances", verifyPageToken, getCreditsPage);
@@ -73,6 +76,8 @@ router.get("/clients", verifyPageToken, getCustomersPage);
 router.get("/fournisseurs", verifyPageToken, requirePermission("supplier:manage"), getSuppliersPage);
 router.get("/depenses", verifyPageToken, requirePermission("expense:manage"), getExpensesPage);
 router.get("/parametres", verifyPageToken, requirePermission("members:manage"), getSettingsPage);
+// Abonnement : consultable par tous les membres, même en lecture seule.
+router.get("/abonnement", verifyPageToken, getSubscriptionPage);
 // Statut relu en base à chaque requête : tout autre compte est redirigé.
 router.get("/admin/shell", requirePageSuperAdmin, getAdminShellPage);
 router.get("/admin", requirePageSuperAdmin, getAdminHomePage);
@@ -82,5 +87,8 @@ router.get("/admin/utilisateurs", requirePageSuperAdmin, getAdminUsersPage);
 router.get("/admin/statistiques", requirePageSuperAdmin, getAdminStatisticsPage);
 router.get("/admin/activite", requirePageSuperAdmin, getAdminActivityPage);
 router.get("/admin/profil", requirePageSuperAdmin, getAdminProfilePage);
+router.get("/admin/abonnements", requirePageSuperAdmin, getAdminSubscriptionsPage);
+router.get("/admin/paiements", requirePageSuperAdmin, getAdminPaymentsPage);
+router.get("/admin/journal", requirePageSuperAdmin, getAdminAuditPage);
 
 export default router;

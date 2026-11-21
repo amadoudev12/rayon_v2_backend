@@ -10,6 +10,8 @@ import { Errors } from "@/lib/api/errors";
 import { revokeUserSessions } from "@/lib/auth/token";
 import { passwordSchema } from "@/lib/validations/auth";
 import { resetMemberPassword } from "@/services/security";
+import { runTransaction } from "@/lib/transactions";
+import { assertQuota } from "@/services/billing/entitlements";
 import { z } from "zod";
 
 const resetSchema = z.object({ motDePasseTemporaire: passwordSchema });
@@ -65,7 +67,9 @@ export async function createMember(req: Request, res: Response) {
 
   const motDePasseHash = await hashPassword(parsed.motDePasse);
 
-  const membership = await prisma.$transaction(async (tx) => {
+  const membership = await runTransaction(async (tx) => {
+    // Quota d'utilisateurs du forfait (propriétaire inclus), vérifié sous verrou.
+    await assertQuota(tx, context.organizationId, "users");
     const user = await tx.utilisateur.create({
       // Mot de passe choisi par le responsable : à remplacer à la première connexion.
       data: { prenom: parsed.prenom, nom: parsed.nom, ...identifierWhere(identifier), motDePasseHash, doitChangerMotDePasse: true },

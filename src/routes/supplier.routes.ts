@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireFeature } from "@/services/billing/entitlements";
 import { verifyToken } from "@/middleware/verifyToken";
 import { requirePermission } from "@/middleware/requirePermission";
 import {
@@ -12,10 +13,10 @@ import {
 const router = Router();
 
 router.get("/", verifyToken, getAllSuppliers);
-router.post("/", verifyToken, requirePermission("supplier:manage"), createSupplier);
-router.put("/:id", verifyToken, requirePermission("supplier:manage"), updateSupplier);
+router.post("/", verifyToken, requirePermission("supplier:manage"), requireFeature("suppliers"), createSupplier);
+router.put("/:id", verifyToken, requirePermission("supplier:manage"), requireFeature("suppliers"), updateSupplier);
 // Supprimer (sans historique) ou archiver : réservé aux responsables.
-router.delete("/:id", verifyToken, requirePermission("supplier:delete"), deleteSupplier);
-router.post("/:id/restore", verifyToken, requirePermission("supplier:delete"), restoreSupplierHandler);
+router.delete("/:id", verifyToken, requirePermission("supplier:delete"), requireFeature("suppliers"), deleteSupplier);
+router.post("/:id/restore", verifyToken, requirePermission("supplier:delete"), requireFeature("suppliers"), restoreSupplierHandler);
 
 export default router;

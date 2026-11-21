@@ -20,6 +20,17 @@ export async function verifyToken(req: Request, _res: Response, next: NextFuncti
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
+ * Variante qui reste ouverte en LECTURE SEULE : page et actions
+ * d'abonnement (consultation, devis, renouvellement), choix de la boutique
+ * affichée et déconnexion des autres appareils (sécurité). Aucune donnée
+ * commerciale n'est modifiable par ces routes.
+ */
+export async function verifyTokenAllowingReadOnly(req: Request, _res: Response, next: NextFunction) {
+  req.user = await requireAuthContext();
+  next();
+}
+
+/**
  * Même contrôle pour les lectures de page (`/api/pages/**`) : au lieu d'une
  * erreur, le site reçoit la page vers laquelle rediriger le visiteur
  * (connexion, onboarding, administration…).

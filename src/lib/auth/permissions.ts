@@ -39,6 +39,8 @@ export const PERMISSIONS = {
   "return:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "expense:manage": [Role.OWNER, Role.ADMIN, Role.MANAGER],
   "report:view": [Role.OWNER, Role.ADMIN, Role.MANAGER, Role.STOCK_MANAGER],
+  /** Souscription, renouvellement, changement de forfait : propriétaire uniquement. */
+  "subscription:manage": [Role.OWNER],
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

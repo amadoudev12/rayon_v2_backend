@@ -1,13 +1,14 @@
 import { Router } from "express";
+import { requireFeature } from "@/services/billing/entitlements";
 import { verifyToken } from "@/middleware/verifyToken";
 import { requirePermission } from "@/middleware/requirePermission";
 import * as controller from "@/controllers/inventory.controller";
 const router = Router();
 router.use(verifyToken);
 router.get("/", requirePermission("inventory:read"), controller.list);
-router.post("/", requirePermission("inventory:create"), controller.create);
+router.post("/", requirePermission("inventory:create"), requireFeature("advanced_stock"), controller.create);
 router.get("/:id", requirePermission("inventory:read"), controller.detail);
-router.put("/:id/lines/:lineId/count", requirePermission("inventory:count"), controller.count);
-router.post("/:id/validate", requirePermission("inventory:validate"), controller.validate);
-router.post("/:id/cancel", requirePermission("inventory:cancel"), controller.cancel);
+router.put("/:id/lines/:lineId/count", requirePermission("inventory:count"), requireFeature("advanced_stock"), controller.count);
+router.post("/:id/validate", requirePermission("inventory:validate"), requireFeature("advanced_stock"), controller.validate);
+router.post("/:id/cancel", requirePermission("inventory:cancel"), requireFeature("advanced_stock"), controller.cancel);
 export default router;

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireFeature } from "@/services/billing/entitlements";
 import { verifyToken } from "@/middleware/verifyToken";
 import { requirePermission } from "@/middleware/requirePermission";
 import * as controller from "@/controllers/loss.controller";
@@ -6,6 +7,6 @@ const router = Router();
 router.use(verifyToken);
 router.get("/", requirePermission("loss:read"), controller.list);
 router.get("/report", requirePermission("loss:read"), controller.report);
-router.post("/", requirePermission("loss:create"), controller.create);
-router.post("/:id/cancel", requirePermission("loss:cancel"), controller.cancel);
+router.post("/", requirePermission("loss:create"), requireFeature("losses"), controller.create);
+router.post("/:id/cancel", requirePermission("loss:cancel"), requireFeature("losses"), controller.cancel);
 export default router;

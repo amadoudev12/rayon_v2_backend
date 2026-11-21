@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { PERMISSIONS, ROLE_LABELS, can, type Permission } from "@/lib/auth/permissions";
 import { resolveActiveStoreId, type AuthContext } from "@/lib/auth/session";
 import { getSubscriptionAccess } from "@/services/subscription";
+import { describeEntitlements } from "@/services/billing/entitlements";
+import { countUnreadNotifications } from "@/services/notifications";
 
 export type AccountProfile = Awaited<ReturnType<typeof getAccountProfile>>;
 
@@ -51,5 +53,8 @@ export async function getAccountProfile(context: AuthContext) {
     permissions: (Object.keys(PERMISSIONS) as Permission[]).filter((permission) => can(context.role, permission)),
     /** État de l'abonnement (UNMANAGED tant que la facturation ne concerne pas l'organisation). */
     subscription: await getSubscriptionAccess(context.organizationId),
+    /** Forfait en vigueur et fonctionnalités non incluses (information ; le serveur contrôle). */
+    entitlements: await describeEntitlements(context.organizationId),
+    unreadNotifications: await countUnreadNotifications(context.userId, context.organizationId),
   };
 }

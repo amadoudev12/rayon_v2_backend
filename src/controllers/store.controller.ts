@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
 import { storeSchema } from "@/lib/validations/member";
 import { jsonData } from "@/lib/api/response";
+import { runTransaction } from "@/lib/transactions";
+import { assertQuota } from "@/services/billing/entitlements";
 
 export async function getAllStores(req: Request, res: Response) {
   const context = req.user;
@@ -19,7 +21,9 @@ export async function createStore(req: Request, res: Response) {
 
   const parsed = storeSchema.parse(req.body);
 
-  const store = await prisma.$transaction(async (tx) => {
+  const store = await runTransaction(async (tx) => {
+    // Quota de boutiques du forfait, vérifié sous verrou (aucun dépassement par requêtes simultanées).
+    await assertQuota(tx, context.organizationId, "stores");
     const createdStore = await tx.boutique.create({
       data: {
         organisationId: context.organizationId,

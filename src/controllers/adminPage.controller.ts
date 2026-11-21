@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { paginationMeta, parseIntId } from "@/lib/api/pagination";
 import { jsonData, searchParams } from "@/lib/api/response";
 import { Errors } from "@/lib/api/errors";
+import { getOrganizationBilling } from "@/services/billing/admin";
 
 /** Lectures de page du site web (`/api/pages/admin/**`) : espace super administrateur. */
 
@@ -63,10 +64,13 @@ export async function getAdminOrganizationPage(req: Request, res: Response) {
   const organizationId = parseIntId(String(req.params.id));
   if (!organizationId) throw pageNotFound("Boutique introuvable");
 
-  const organization = await platformAdminService.getOrganizationDetails(organizationId);
+  const [organization, billing] = await Promise.all([
+    platformAdminService.getOrganizationDetails(organizationId),
+    getOrganizationBilling(organizationId),
+  ]);
   if (!organization) throw pageNotFound("Boutique introuvable");
 
-  return jsonData(res, organization);
+  return jsonData(res, { ...organization, billing });
 }
 
 export async function getAdminUsersPage(req: Request, res: Response) {

@@ -79,7 +79,7 @@ export function organizationStatus(actif: boolean, lastActivity: Date | null, no
 // ---------------------------------------------------------------------------
 
 export type PlatformAlert = {
-  key: "inactive" | "neverUsed" | "suspended" | "onboarding";
+  key: "inactive" | "neverUsed" | "suspended" | "onboarding" | "paymentsToConfirm" | "paymentsToReview";
   tone: "warning" | "danger" | "neutral";
   count: number;
   title: string;
@@ -94,7 +94,7 @@ export const getPlatformAlerts = requestCache(async (): Promise<PlatformAlert[]>
   const graceLimit = new Date(now.getTime() - NEVER_USED_GRACE_DAYS * DAY_MS);
   const onboardingLimit = new Date(now.getTime() - DAY_MS);
 
-  const [[organizations], pendingOnboarding] = await Promise.all([
+  const [[organizations], pendingOnboarding, paymentsToConfirm, paymentsToReview] = await Promise.all([
     prisma.$queryRaw<{ inactive: number; neverUsed: number; suspended: number }[]>`
       SELECT
         (COUNT(*) FILTER (WHERE x."actif" AND x."lastActivity" < ${sqlTimestamp(inactiveSince)}))::int AS "inactive",
@@ -107,6 +107,9 @@ export const getPlatformAlerts = requestCache(async (): Promise<PlatformAlert[]>
     prisma.utilisateur.count({
       where: { superAdmin: false, membre: null, creeLe: { lt: onboardingLimit } },
     }),
+    // Abonnements : paiements hors ligne en attente de confirmation, et incohérences à traiter.
+    prisma.paiementAbonnement.count({ where: { statut: "PENDING", paiementRecuLe: null } }),
+    prisma.paiementAbonnement.count({ where: { OR: [{ statut: "UNDER_REVIEW" }, { statut: "PENDING", paiementRecuLe: { not: null } }] } }),
   ]);
 
   const plural = (count: number, one: string, many: string) => (count > 1 ? many : one);
@@ -134,6 +137,22 @@ export const getPlatformAlerts = requestCache(async (): Promise<PlatformAlert[]>
       title: `${pendingOnboarding} ${plural(pendingOnboarding, "inscription inachevée", "inscriptions inachevées")}`,
       description: "Comptes créés depuis plus de 24 h sans boutique configurée.",
       href: "/admin/utilisateurs?status=onboarding",
+    },
+    {
+      key: "paymentsToReview",
+      tone: "danger",
+      count: paymentsToReview,
+      title: `${paymentsToReview} ${plural(paymentsToReview, "paiement à vérifier", "paiements à vérifier")}`,
+      description: "Argent reçu mais abonnement non activé automatiquement (montant, suspension…).",
+      href: "/admin/paiements?status=UNDER_REVIEW",
+    },
+    {
+      key: "paymentsToConfirm",
+      tone: "warning",
+      count: paymentsToConfirm,
+      title: `${paymentsToConfirm} ${plural(paymentsToConfirm, "paiement en attente", "paiements en attente")}`,
+      description: "Demandes de paiement d'abonnement à confirmer à réception de l'argent.",
+      href: "/admin/paiements?status=PENDING",
     },
     {
       key: "suspended",

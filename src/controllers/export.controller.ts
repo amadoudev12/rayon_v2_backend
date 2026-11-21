@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { prisma } from "@/lib/prisma";
-import { can } from "@/lib/auth/permissions";
+import { canViewFinance } from "@/services/billing/entitlements";
 import { resolveRequestStoreId } from "@/lib/auth/store";
 import { parsePeriod } from "@/lib/period";
 import { searchParams } from "@/lib/api/response";
@@ -27,7 +27,7 @@ async function context(req: Request) {
 export async function exportSales(req: Request, res: Response) {
   const { params, storeId, timeZone } = await context(req);
   const period = parsePeriod(params, new Date(), timeZone);
-  const withCosts = can(req.user.role, "report:view");
+  const withCosts = await canViewFinance(req.user);
   const write = startCsv(res, `ventes-${period.from}-${period.to}.csv`, [
     "Vente", "Date", "Statut", "Client", "Vendeur", "Paiement", "Sous-total", "Remise", "Total", "Retours", "Payé", "Reste à payer", "Échéance",
     ...(withCosts ? ["Coût des articles", "Marge brute"] : []),

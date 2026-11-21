@@ -25,6 +25,9 @@ import stockRoutes from "@/routes/stock.routes";
 import inventoryRoutes from "@/routes/inventory.routes";
 import lossRoutes from "@/routes/loss.routes";
 import storeRoutes from "@/routes/store.routes";
+import subscriptionRoutes from "@/routes/subscription.routes";
+import notificationRoutes from "@/routes/notification.routes";
+import webhookRoutes from "@/routes/webhook.routes";
 import supplierRoutes from "@/routes/supplier.routes";
 import exportRoutes from "@/routes/export.routes";
 
@@ -38,9 +41,12 @@ export function createApp() {
   app.use(securityHeaders);
   app.use(cors({ origin: allowedOrigins(), credentials: true }));
   app.use(cookieParser());
-  app.use(express.json({ limit: "1mb" }));
   app.use(requestContext);
   app.use(requestLogger);
+  // Notifications des prestataires de paiement : corps BRUT (vérification de
+  // signature), avant l'analyse JSON ; jamais de session ni de cookie.
+  app.use("/api/webhooks", webhookRoutes);
+  app.use(express.json({ limit: "1mb" }));
   app.use(verifyOrigin);
 
   // Vivacité : le processus répond (pour le redémarrage automatique).
@@ -65,6 +71,8 @@ export function createApp() {
   // Connexion, session, inscription, profil, onboarding
   app.use("/api", authRoutes);
   app.use("/api/organization", organizationRoutes);
+  app.use("/api/subscription", subscriptionRoutes);
+  app.use("/api/notifications", notificationRoutes);
   app.use("/api/stores", storeRoutes);
   app.use("/api/members", memberRoutes);
   app.use("/api/categories", categoryRoutes);

@@ -14,6 +14,8 @@ import { containsText } from "@/lib/search";
 import { getOnboardingRedirect, getSession, getSuspendedRedirect } from "@/lib/auth/session";
 import { getActiveStoreId } from "@/lib/auth/store";
 import { can } from "@/lib/auth/permissions";
+import { canViewFinance, describeEntitlements } from "@/services/billing/entitlements";
+import { countUnreadNotifications } from "@/services/notifications";
 import { getPagination, paginationMeta } from "@/lib/api/pagination";
 import { jsonData, searchParams } from "@/lib/api/response";
 import { PageRedirect } from "@/lib/api/errors";
@@ -72,6 +74,9 @@ export async function getShellPage(req: Request, res: Response) {
     role: context.role,
     stores,
     subscription: await getSubscriptionAccess(context.organizationId),
+    entitlements: await describeEntitlements(context.organizationId),
+    unreadNotifications: await countUnreadNotifications(context.userId, context.organizationId),
+    canManageSubscription: can(context.role, "subscription:manage"),
     // Null quand le membre est limité à une seule boutique (pas de sélecteur).
     activeStoreId: context.membershipStoreId ? null : activeStoreId,
   });
@@ -84,7 +89,7 @@ export async function getDashboardPage(req: Request, res: Response) {
   const [organization, store, stats, totalProducts, totalSales] = await Promise.all([
     prisma.organisation.findUniqueOrThrow({ where: { id: context.organizationId }, select: { devise: true } }),
     prisma.boutique.findUniqueOrThrow({ where: { id: storeId }, select: { nom: true } }),
-    dashboardService.getDashboardStats(context, storeId, can(context.role, "report:view")),
+    dashboardService.getDashboardStats(context, storeId, await canViewFinance(context)),
     prisma.produit.count({ where: { organisationId: context.organizationId } }),
     prisma.vente.count({ where: { organisationId: context.organizationId } }),
   ]);
@@ -203,7 +208,7 @@ export async function getSalesPage(req: Request, res: Response) {
   const context = req.user;
   const storeId = await getActiveStoreId(context);
   const canCancel = can(context.role, "sale:cancel");
-  const canViewFinance = can(context.role, "report:view");
+  const canViewMargins = await canViewFinance(context);
 
   const search = params.get("search")?.trim() ?? "";
   const pagination = getPagination(params, 10);
@@ -247,7 +252,7 @@ export async function getSalesPage(req: Request, res: Response) {
   return jsonData(res, {
     sales: salesForClient,
     period,
-    stats: visibleSalesStats(stats, canViewFinance),
+    stats: visibleSalesStats(stats, canViewMargins),
     canCancel,
     canCollect: can(context.role, "sale:create"),
     canReturn: can(context.role, "return:manage"),
@@ -397,7 +402,7 @@ export async function getCreditsPage(req: Request, res: Response) {
     canCollect: can(context.role, "sale:create"),
     canReturn: can(context.role, "return:manage"),
     canRefund: can(context.role, "refund:manage"),
-    canViewFinance: can(context.role, "report:view"),
+    canViewFinance: await canViewFinance(context),
     currency: organization.devise,
     page: pagination.page,
     totalPages: paginationMeta(pagination, total).totalPages,

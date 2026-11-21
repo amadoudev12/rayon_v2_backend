@@ -13,6 +13,13 @@ export const onboardingSchema = z.object({
     .refine((value) => normalizePhone(value) !== null, "Numéro invalide : indiquez l'indicatif du pays (ex : +225 07 07 05 75 65).")
     .transform((value) => normalizePhone(value) as string),
   devise: z.enum(["XOF", "XAF", "EUR", "USD", "MAD", "GNF", "CDF"]).default("XOF"),
+  /** Pays (ISO 3166-1 alpha-2). Facultatif : déduit de l'indicatif du téléphone sinon. */
+  pays: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z]{2}$/, "Code pays invalide (2 lettres, ex : CI, SN).")
+    .transform((value) => value.toUpperCase())
+    .optional(),
 });
 
 export type OnboardingFormData = z.infer<typeof onboardingSchema>;

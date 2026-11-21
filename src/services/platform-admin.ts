@@ -7,6 +7,7 @@ import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { identifierTakenMessage, identifierWhere, parseIdentifier } from "@/lib/auth/identifier";
 import { containsText } from "@/lib/search";
 import { slugify } from "@/lib/slug";
+import { startTrial } from "@/services/subscription";
 import { getPagination, getSort, type Pagination } from "@/lib/api/pagination";
 import type { AdminCreateOrganizationData, AdminProfileData } from "@/lib/validations/admin";
 import {
@@ -262,6 +263,8 @@ export async function createOrganizationWithOwner(adminId: number, input: AdminC
     });
     await tx.boutique.create({ data: { organisationId: created.id, nom: input.nomBoutique, parDefaut: true } });
     await tx.membre.create({ data: { utilisateurId: owner.id, organisationId: created.id, role: Role.OWNER } });
+    // Nouvelle organisation : essai gratuit unique, comme à l'inscription.
+    await startTrial(tx, created.id, adminId);
     return created;
   });
 
