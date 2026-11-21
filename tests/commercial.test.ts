@@ -144,7 +144,7 @@ describe("abonnements (fondations)", () => {
     signIn(admin.id, null, null);
     await request(app)
       .put(`/api/admin/organizations/${shop.organisation.id}/subscription`)
-      .send({ plan: "essentiel", statut: "ACTIVE", periodeDebut: past, periodeFin: expired })
+      .send({ plan: "essentiel", statut: "ACTIVE", periodeDebut: past, periodeFin: expired, motif: "Saisie de test" })
       .expect(200);
 
     process.env.SUBSCRIPTIONS_ENFORCED = "true";
@@ -157,7 +157,7 @@ describe("abonnements (fondations)", () => {
     expect((await request(app).get("/api/me")).body.data.subscription).toMatchObject({ state: "READ_ONLY", canWrite: false });
 
     signIn(admin.id, null, null);
-    const payment = { referenceExterne: "OM-2026-000123", montant: 15_000, devise: "XOF", periodeDebut: new Date(), periodeFin: new Date(Date.now() + 30 * day) };
+    const payment = { referenceExterne: "OM-2026-000123", montant: 15_000, devise: "XOF", periodeDebut: new Date(), periodeFin: new Date(Date.now() + 30 * day), motif: "Paiement Orange Money reçu" };
     expect((await request(app).post(`/api/admin/organizations/${shop.organisation.id}/subscription/payments`).send(payment)).status).toBe(201);
     expect((await request(app).post(`/api/admin/organizations/${shop.organisation.id}/subscription/payments`).send(payment)).status).toBe(200);
     expect(await prisma.paiementAbonnement.count()).toBe(1);
