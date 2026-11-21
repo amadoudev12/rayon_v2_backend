@@ -51,10 +51,17 @@ enum SubscriptionStatus {
 }
 
 enum SubscriptionPaymentStatus {
+  /// Transaction créée, paiement non confirmé : aucun effet sur l'abonnement.
   PENDING
+  /// Paiement confirmé ET abonnement activé ou prolongé (reçu émis).
   SUCCEEDED
   FAILED
   REFUNDED
+  /// Abandonnée par le client ou expirée sans paiement.
+  CANCELLED
+  /// Paiement reçu mais non applicable automatiquement (montant incorrect,
+  /// abonnement suspendu…) : à traiter par l'administration.
+  UNDER_REVIEW
 }
 
 /// Nature d'une annulation de vente.
@@ -167,6 +174,11 @@ model Utilisateur {
   sessions                 SessionUtilisateur[]
   ventesEnAttente          VenteEnAttente[]         @relation("VenteEnAttenteCreePar")
   evenementsSecurite       JournalSecurite[]
+  historiqueAbonnements    HistoriqueAbonnement[]   @relation("HistoriqueAbonnementAuteur")
+  paiementsAbonnementCrees PaiementAbonnement[]     @relation("PaiementAbonnementCreePar")
+  evenementsPaiement       EvenementPaiement[]
+  notifications            Notification[]
+  interventionsAdmin       JournalAdministration[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
@@ -184,28 +196,36 @@ model Organisation {
   /// Faux quand le super administrateur a suspendu l'organisation : ses
   /// membres ne peuvent plus utiliser l'application (données conservées).
   actif               Boolean @default(true)
+  /// Pays de l'organisation (code ISO 3166-1 alpha-2, ex : CI, SN). Null :
+  /// inconnu (organisations créées avant ce champ).
+  pays                String?
   /// Remise maximale (en % du prix catalogue) accordée par un vendeur.
   remiseMaxVendeurPct Int     @default(10)
   /// Remise maximale accordée par un gérant. Propriétaire et administrateur : sans limite.
   remiseMaxGerantPct  Int     @default(30)
 
-  membres         Membre[]
-  boutiques       Boutique[]
-  categories      Categorie[]
-  produits        Produit[]
-  clients         Client[]
-  fournisseurs    Fournisseur[]
-  ventes          Vente[]
-  achats          Achat[]
-  depenses        Depense[]
-  devis           Devis[]
-  journauxAudit   JournalAudit[]
-  inventaires     Inventaire[]
-  pertesStock     PerteStock[]
-  seuilsStock     SeuilStockBoutique[]
-  retoursVente    RetourVente[]
-  abonnement      Abonnement?
-  ventesEnAttente VenteEnAttente[]
+  membres               Membre[]
+  boutiques             Boutique[]
+  categories            Categorie[]
+  produits              Produit[]
+  clients               Client[]
+  fournisseurs          Fournisseur[]
+  ventes                Vente[]
+  achats                Achat[]
+  depenses              Depense[]
+  devis                 Devis[]
+  journauxAudit         JournalAudit[]
+  inventaires           Inventaire[]
+  pertesStock           PerteStock[]
+  seuilsStock           SeuilStockBoutique[]
+  retoursVente          RetourVente[]
+  abonnement            Abonnement?
+  ventesEnAttente       VenteEnAttente[]
+  historiqueAbonnements HistoriqueAbonnement[]
+  paiementsAbonnement   PaiementAbonnement[]
+  recusAbonnement       RecuAbonnement[]
+  notifications         Notification[]
+  journalAdministration JournalAdministration[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
@@ -993,50 +1013,226 @@ model CompteurLimite {
 
 /// Abonnement d'une organisation. Absent : organisation non soumise aux
 /// abonnements (comptes historiques, tant que la facturation n'est pas activée).
+/// Les prix, quotas et droits viennent du catalogue (services/billing/plans).
 model Abonnement {
-  id               Int                @id @default(autoincrement())
-  /// Code de l'offre (ex : "essentiel", "pro").
-  plan             String
-  statut           SubscriptionStatus @default(TRIAL)
-  essaiFinLe       DateTime?
-  periodeDebut     DateTime
-  periodeFin       DateTime
-  annuleLe         DateTime?
+  id                    Int                 @id @default(autoincrement())
+  /// Code du forfait : STARTER, BUSINESS ou PREMIUM (codes antérieurs au
+  /// catalogue conservés tels quels, traités comme PREMIUM).
+  plan                  String
+  statut                SubscriptionStatus  @default(TRIAL)
+  /// Début de l'essai gratuit. Renseigné : l'essai unique a été consommé.
+  essaiDebutLe          DateTime?
+  essaiFinLe            DateTime?
+  periodeDebut          DateTime
+  periodeFin            DateTime
+  annuleLe              DateTime?
   /// Prestataire de paiement retenu (ex : "wave", "orange_money", "cinetpay").
-  fournisseur      String?
+  fournisseur           String?
   /// Identifiant de l'abonnement ou du client chez le prestataire.
-  referenceExterne String?
+  referenceExterne      String?
+  /// Rétrogradation programmée : forfait appliqué à `forfaitProgrammeLe`.
+  forfaitProgramme      String?
+  forfaitProgrammeLe    DateTime?
+  /// Suspension administrative (statut SUSPENDED) : date et motif.
+  suspenduLe            DateTime?
+  motifSuspension       String?
+  /// Statut rétabli à la réactivation (essai ou période payée).
+  statutAvantSuspension SubscriptionStatus?
 
-  organisationId Int                  @unique
-  organisation   Organisation         @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  organisationId Int                    @unique
+  organisation   Organisation           @relation(fields: [organisationId], references: [id], onDelete: Restrict)
   paiements      PaiementAbonnement[]
+  historique     HistoriqueAbonnement[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
 }
 
-/// Paiement d'abonnement notifié par un prestataire. L'unicité
-/// (fournisseur, référence) rend le traitement des notifications idempotent.
+/// Transaction de paiement d'abonnement. Créée par le serveur (montant
+/// calculé par le backend, référence interne unique) AVANT le paiement ; elle
+/// n'a d'effet sur l'abonnement qu'une fois confirmée. Jamais supprimée :
+/// l'historique financier reste complet. L'unicité (fournisseur, référence
+/// externe) rend le traitement des confirmations idempotent.
 model PaiementAbonnement {
   id               Int                       @id @default(autoincrement())
+  /// Montant DÛ, calculé par le serveur.
   montant          Decimal                   @db.Decimal(12, 2)
   devise           String
   statut           SubscriptionPaymentStatus @default(PENDING)
+  /// MANUEL (Mobile Money hors ligne confirmé par l'administration) ou
+  /// identifiant du prestataire.
   fournisseur      String
-  referenceExterne String
-  /// Période couverte par ce paiement.
+  /// Référence de la transaction chez le prestataire (null tant qu'inconnue).
+  referenceExterne String?
+  /// Référence interne unique, communiquée au client et au prestataire.
+  referenceInterne String?                   @unique
+  /// Achat demandé : PERIOD (souscription, renouvellement) ou UPGRADE.
+  typeAchat        String?
+  forfait          String?
+  dureeMois        Int?
+  /// Période couverte : estimée à la création, définitive à l'activation.
   periodeDebut     DateTime
   periodeFin       DateTime
+  /// Montant effectivement reçu, moyen de paiement et date de confirmation.
+  montantRecu      Decimal?                  @db.Decimal(12, 2)
+  moyenPaiement    String?
+  paiementRecuLe   DateTime?
+  /// Date d'activation de l'abonnement (statut SUCCEEDED).
   payeLe           DateTime?
+  /// Motif d'échec, d'annulation ou de mise en vérification.
+  motif            String?
   metadonnees      Json?
 
-  abonnementId Int
-  abonnement   Abonnement @relation(fields: [abonnementId], references: [id], onDelete: Restrict)
+  organisationId Int?
+  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  abonnementId   Int?
+  abonnement     Abonnement?   @relation(fields: [abonnementId], references: [id], onDelete: Restrict)
+  creeParId      Int?
+  creePar        Utilisateur?  @relation("PaiementAbonnementCreePar", fields: [creeParId], references: [id], onDelete: SetNull)
 
-  creeLe DateTime @default(now())
+  recu       RecuAbonnement?
+  evenements EvenementPaiement[]
+
+  creeLe    DateTime @default(now())
+  modifieLe DateTime @default(now()) @updatedAt
 
   @@unique([fournisseur, referenceExterne])
   @@index([abonnementId, creeLe])
+  @@index([organisationId, creeLe])
+  @@index([statut, creeLe])
+}
+
+/// Reçu numérique d'un paiement confirmé : un seul par paiement, jamais
+/// modifié. Les informations sont figées au moment de l'émission.
+model RecuAbonnement {
+  id                   Int      @id @default(autoincrement())
+  numero               String   @unique
+  nomOrganisation      String
+  forfait              String
+  typeAchat            String
+  dureeMois            Int?
+  montant              Decimal  @db.Decimal(12, 2)
+  devise               String
+  moyenPaiement        String?
+  referenceTransaction String
+  referenceExterne     String?
+  confirmeLe           DateTime
+  periodeDebut         DateTime
+  periodeFin           DateTime
+
+  organisationId Int
+  organisation   Organisation       @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  paiementId     Int                @unique
+  paiement       PaiementAbonnement @relation(fields: [paiementId], references: [id], onDelete: Restrict)
+
+  emisLe DateTime @default(now())
+
+  @@index([organisationId, emisLe])
+}
+
+/// Journal en ajout seul de tout ce qui arrive à une transaction : création,
+/// notification du prestataire (signature vérifiée ou rejetée), confirmation
+/// manuelle, activation, mise en vérification, rapprochement. L'unicité
+/// (fournisseur, identifiant d'événement) écarte les notifications répétées.
+model EvenementPaiement {
+  id                   Int     @id @default(autoincrement())
+  fournisseur          String
+  identifiantEvenement String?
+  type                 String
+  /// RECEIVED, PROCESSED, IGNORED, REJECTED, FAILED.
+  statutTraitement     String
+  donnees              Json?
+  erreur               String?
+
+  paiementId    Int?
+  paiement      PaiementAbonnement? @relation(fields: [paiementId], references: [id], onDelete: SetNull)
+  effectueParId Int?
+  effectuePar   Utilisateur?        @relation(fields: [effectueParId], references: [id], onDelete: SetNull)
+
+  creeLe DateTime @default(now())
+
+  @@unique([fournisseur, identifiantEvenement])
+  @@index([paiementId, creeLe])
+  @@index([creeLe])
+}
+
+/// Journal d'audit de l'administration centrale (ajout seul) : chaque
+/// intervention manuelle d'un administrateur de Rayon, avec l'ancienne et la
+/// nouvelle valeur et le motif. Jamais modifié ni supprimé.
+model JournalAdministration {
+  id             Int     @id @default(autoincrement())
+  /// Ex : subscription.plan_assigned, subscription.extended,
+  /// subscription.suspended, payment.confirmed…
+  action         String
+  entite         String
+  entiteId       Int?
+  ancienneValeur Json?
+  nouvelleValeur Json?
+  motif          String?
+
+  adminId        Int
+  admin          Utilisateur   @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  organisationId Int?
+  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+
+  creeLe DateTime @default(now())
+
+  @@index([creeLe])
+  @@index([organisationId, creeLe])
+  @@index([adminId, creeLe])
+}
+
+/// Notification intégrée à l'application (aucun envoi email ou WhatsApp).
+/// `cle` empêche de générer deux fois la même notification.
+model Notification {
+  id      Int       @id @default(autoincrement())
+  type    String
+  titre   String
+  message String
+  /// Page concernée (ex : /abonnement).
+  lien    String?
+  cle     String
+  luLe    DateTime?
+
+  organisationId Int
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  utilisateurId  Int
+  utilisateur    Utilisateur  @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+
+  creeLe DateTime @default(now())
+
+  @@unique([organisationId, cle])
+  @@index([utilisateurId, luLe, creeLe])
+}
+
+/// Historique en ajout seul de chaque changement d'un abonnement (essai,
+/// souscription, renouvellement, changement de forfait, intervention).
+model HistoriqueAbonnement {
+  id                 Int                 @id @default(autoincrement())
+  /// Ex : TRIAL_STARTED, SUBSCRIBED, RENEWED, UPGRADED, DOWNGRADE_SCHEDULED,
+  /// DOWNGRADE_CANCELLED, PLAN_CHANGED, ADMIN_UPDATED, PAYMENT_RECORDED.
+  action             String
+  ancienForfait      String?
+  nouveauForfait     String?
+  ancienStatut       SubscriptionStatus?
+  nouveauStatut      SubscriptionStatus?
+  anciennePeriodeFin DateTime?
+  nouvellePeriodeFin DateTime?
+  motif              String?
+  metadonnees        Json?
+
+  abonnementId   Int
+  abonnement     Abonnement   @relation(fields: [abonnementId], references: [id], onDelete: Restrict)
+  organisationId Int
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Restrict)
+  /// Auteur (propriétaire, administrateur central) ; null : système.
+  effectueParId  Int?
+  effectuePar    Utilisateur? @relation("HistoriqueAbonnementAuteur", fields: [effectueParId], references: [id], onDelete: SetNull)
+
+  creeLe DateTime @default(now())
+
+  @@index([abonnementId, creeLe])
+  @@index([organisationId, creeLe])
 }
 
 // ---------------------------------------------------------------------------
