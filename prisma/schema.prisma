@@ -74,6 +74,13 @@ enum CancellationKind {
   LEGACY
 }
 
+/// Canal par lequel un accord juridique a été recueilli.
+enum LegalAcceptanceSource {
+  REGISTRATION
+  WEB
+  MOBILE
+}
+
 enum InventoryStatus {
   DRAFT
   IN_PROGRESS
@@ -179,9 +186,26 @@ model Utilisateur {
   evenementsPaiement       EvenementPaiement[]
   notifications            Notification[]
   interventionsAdmin       JournalAdministration[]
+  acceptationsJuridiques   AcceptationJuridique[]
 
   creeLe    DateTime @default(now())
   modifieLe DateTime @updatedAt
+}
+
+/// Preuve d'acceptation des CGU et de la Politique de confidentialité.
+/// AJOUT SEUL (trigger en base) : une nouvelle acceptation n'écrase jamais
+/// les précédentes. Ni adresse IP ni User-Agent : inutiles à cette preuve.
+/// Textes et versions : src/legal/registry.ts.
+model AcceptationJuridique {
+  id             Int                   @id @default(autoincrement())
+  userId         Int
+  utilisateur    Utilisateur           @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  termsVersion   String
+  privacyVersion String
+  acceptedAt     DateTime              @default(now())
+  source         LegalAcceptanceSource
+
+  @@unique([userId, termsVersion, privacyVersion])
 }
 
 /// Un client SaaS (tenant). Toutes les données métier sont rattachées à une

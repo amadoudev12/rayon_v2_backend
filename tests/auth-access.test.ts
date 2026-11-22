@@ -20,7 +20,7 @@ import {
 } from "@/lib/auth/session";
 import { createApp } from "@/app";
 import { createSale } from "@/services/sale";
-import { contextFor, createMember, createProduit, createShop, resetDatabase } from "./helpers/factories";
+import { acceptedDocuments, contextFor, createMember, createProduit, createShop, resetDatabase } from "./helpers/factories";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -79,7 +79,8 @@ describe("règles d'accès — la base fait foi, pas le jeton", () => {
 
   it("refuse une session dont le compte a été supprimé", async () => {
     const shop = await createShop();
-    const seller = await createMember(shop.organisation.id, Role.SELLER);
+    // Sans preuve d'acceptation : un compte qui en a une ne peut plus être supprimé (voir legal.test).
+    const seller = await createMember(shop.organisation.id, Role.SELLER, null, { accepted: false });
     signIn(seller.utilisateur.id, { organizationId: shop.organisation.id, role: Role.SELLER, storeId: null });
 
     await prisma.utilisateur.delete({ where: { id: seller.utilisateur.id } });
@@ -90,7 +91,7 @@ describe("règles d'accès — la base fait foi, pas le jeton", () => {
 
   it("envoie vers l'onboarding un compte qui n'a pas encore d'organisation", async () => {
     const user = await prisma.utilisateur.create({
-      data: { prenom: "Nouveau", nom: "Compte", email: "nouveau@test.local", motDePasseHash: "x" },
+      data: { prenom: "Nouveau", nom: "Compte", email: "nouveau@test.local", motDePasseHash: "x", ...acceptedDocuments() },
     });
     signIn(user.id, null);
 

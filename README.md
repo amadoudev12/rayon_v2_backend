@@ -43,6 +43,7 @@ $env:SUPER_ADMIN_EMAIL = "moi@exemple.com"; $env:SUPER_ADMIN_PASSWORD = "MotDePa
 | `npm run db:migrate` | Applique les migrations Prisma |
 | `npm run db:seed` | Crée les données de démonstration (ne fait rien si elles existent) |
 | `npm run admin:create` | Crée ou promeut un super administrateur |
+| `npm run legal:report` | Comptes devant accepter les documents juridiques (lecture seule) |
 | `npm test` | Tests d'intégration (65 tests) |
 | `npm run typecheck` / `npm run lint` | Contrôle de types / ESLint |
 
@@ -86,6 +87,10 @@ TEST_DATABASE_URL=postgresql://rayon_test:rayon_test@localhost:55432/rayon_test
 ```
 
 La CI (`.github/workflows/ci.yml`) exécute typecheck, lint, `db:check` et les tests sur une base PostgreSQL éphémère.
+
+## Documents juridiques
+
+L'inscription et l'utilisation de Rayon exigent l'acceptation des CGU et de la Politique de confidentialité ; les comptes de `db:seed` l'acceptent à leur première connexion. Versions, publication et preuves : `docs/DOCUMENTS-JURIDIQUES.md`.
 
 ## Phase 1 commerciale
 

@@ -14,6 +14,7 @@ import { changeOwnPassword, listActiveSessions } from "@/services/security";
 import { SESSION_RENEW_AFTER_MS, renewSessionCookie } from "@/lib/auth/web-session";
 import { loginSchema, passwordSchema, registerSchema } from "@/lib/validations/auth";
 import { onboardingSchema } from "@/lib/validations/onboarding";
+import { parseLegalConsent } from "@/lib/validations/legal";
 import { recordAuditLog } from "@/lib/api/audit";
 import { jsonData, jsonMessage } from "@/lib/api/response";
 import { ApiError, Errors } from "@/lib/api/errors";
@@ -164,6 +165,8 @@ export async function mobileLogin(req: Request, res: Response) {
 
 export async function register(req: Request, res: Response) {
   const parsed = registerSchema.parse(req.body);
+  // Aucun compte n'est créé sans accord explicite sur les versions en vigueur.
+  const acceptedVersions = parseLegalConsent(req.body);
   // Le schéma a déjà validé le format : l'identifiant est forcément reconnu.
   const identifier = parseIdentifier(parsed.identifiant)!;
 
@@ -179,6 +182,8 @@ export async function register(req: Request, res: Response) {
       nom: parsed.nom,
       ...identifierWhere(identifier),
       motDePasseHash,
+      // Même écriture que le compte : l'un n'existe pas sans l'autre.
+      acceptationsJuridiques: { create: { ...acceptedVersions, source: "REGISTRATION" } },
     },
     select: { id: true, prenom: true, nom: true, email: true, telephone: true },
   });

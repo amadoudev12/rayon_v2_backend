@@ -1,6 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { Role } from "@/generated/prisma/enums";
 import type { AuthContext } from "@/lib/auth/session";
+import { currentVersions } from "@/legal/status";
+
+/** À placer dans `data` d'un utilisateur de test qui a accepté les documents en vigueur. */
+export const acceptedDocuments = () => ({
+  acceptationsJuridiques: { create: { ...currentVersions(), source: "REGISTRATION" as const } },
+});
+
+/** Corps d'une inscription valide : accord explicite sur les versions en vigueur. */
+export const consent = () => ({ accepteDocuments: true, ...currentVersions() });
 
 /** Vide toutes les tables de la base de test (hors historique des migrations). */
 export async function resetDatabase() {
@@ -43,10 +52,15 @@ export async function createShop(name = "Boutique test") {
 }
 
 /** Crée un utilisateur membre d'une organisation, avec le rôle donné. */
-export async function createMember(organisationId: number, role: Role, boutiqueId: number | null = null) {
+export async function createMember(
+  organisationId: number,
+  role: Role,
+  boutiqueId: number | null = null,
+  { accepted = true }: { accepted?: boolean } = {},
+) {
   const n = next();
   const utilisateur = await prisma.utilisateur.create({
-    data: { prenom: `Prénom${n}`, nom: `Nom${n}`, email: `membre${n}@test.local`, motDePasseHash: "non-utilisé" },
+    data: { prenom: `Prénom${n}`, nom: `Nom${n}`, email: `membre${n}@test.local`, motDePasseHash: "non-utilisé", ...(accepted ? acceptedDocuments() : {}) },
   });
   const membre = await prisma.membre.create({
     data: { utilisateurId: utilisateur.id, organisationId, role, boutiqueId },

@@ -23,6 +23,7 @@ import saleRoutes from "@/routes/sale.routes";
 import heldSaleRoutes from "@/routes/held-sale.routes";
 import stockRoutes from "@/routes/stock.routes";
 import inventoryRoutes from "@/routes/inventory.routes";
+import legalRoutes from "@/routes/legal.routes";
 import lossRoutes from "@/routes/loss.routes";
 import storeRoutes from "@/routes/store.routes";
 import subscriptionRoutes from "@/routes/subscription.routes";
@@ -66,6 +67,7 @@ export function createApp() {
   });
 
   // Routes
+  app.use("/api/legal", legalRoutes);
   app.use("/api/admin", adminRoutes);
   app.use("/api/pages", pageRoutes);
   // Connexion, session, inscription, profil, onboarding

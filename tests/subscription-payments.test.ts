@@ -25,7 +25,7 @@ import { createApp } from "@/app";
 import { reconcilePayments } from "@/services/billing/payments";
 import { InvalidNotificationError, registerProvider, unregisterProvider, type ProviderStatus, type SubscriptionPaymentProvider } from "@/services/billing/provider";
 import { dueReminder, runExpiryNotifications } from "@/services/notifications";
-import { createMember, createShop, resetDatabase } from "./helpers/factories";
+import { acceptedDocuments, createMember, createShop, resetDatabase } from "./helpers/factories";
 
 const app = createApp();
 const DAY = 86_400_000;
@@ -65,7 +65,7 @@ async function subscribe(shop: Shop, plan: string, daysLeft: number) {
 }
 
 async function superAdmin() {
-  return prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: `root${Date.now()}@plateforme.test`, motDePasseHash: "x", superAdmin: true } });
+  return prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: `root${Date.now()}@plateforme.test`, motDePasseHash: "x", superAdmin: true, ...acceptedDocuments() } });
 }
 
 const startPayment = (body: Record<string, unknown>) => request(app).post("/api/subscription/payments").send(body);

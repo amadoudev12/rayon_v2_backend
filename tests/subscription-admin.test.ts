@@ -17,7 +17,7 @@ vi.mock("@/lib/auth/token", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { Role, SubscriptionStatus } from "@/generated/prisma/enums";
 import { createApp } from "@/app";
-import { createProduit, createShop, resetDatabase, testKey } from "./helpers/factories";
+import { acceptedDocuments, createProduit, createShop, resetDatabase, testKey } from "./helpers/factories";
 
 const app = createApp();
 const DAY = 86_400_000;
@@ -42,7 +42,7 @@ type Shop = Awaited<ReturnType<typeof createShop>>;
 const asOwner = (shop: Shop) => signIn(shop.owner.utilisateur.id, shop.organisation.id, Role.OWNER);
 
 async function asSuperAdmin() {
-  const admin = await prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: `root${Date.now()}${Math.random()}@plateforme.test`, motDePasseHash: "x", superAdmin: true } });
+  const admin = await prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: `root${Date.now()}${Math.random()}@plateforme.test`, motDePasseHash: "x", superAdmin: true, ...acceptedDocuments() } });
   signIn(admin.id);
   return admin;
 }

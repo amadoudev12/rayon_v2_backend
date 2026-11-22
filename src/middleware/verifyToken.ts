@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import { requireAuthContext, requirePageAuthContext, requireUserId } from "@/lib/auth/session";
+import { requireAuthContext, requireLegalUserId, requirePageAuthContext, requireUserId } from "@/lib/auth/session";
 import { assertCanWrite } from "@/services/subscription";
 
 /**
@@ -55,5 +55,11 @@ export async function verifyPageToken(req: Request, _res: Response, next: NextFu
  */
 export async function verifyAccount(req: Request, _res: Response, next: NextFunction) {
   req.userId = await requireUserId();
+  next();
+}
+
+/** Compte connecté, qu'il ait accepté ou non : réservé aux routes `/api/legal`. */
+export async function verifyLegalAccount(req: Request, _res: Response, next: NextFunction) {
+  req.userId = await requireLegalUserId();
   next();
 }
