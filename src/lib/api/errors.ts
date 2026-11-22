@@ -44,27 +44,6 @@ export const Errors = {
   conflict: (message: string) => new ApiError(409, message),
   passwordChangeRequired: () =>
     new ApiError(403, "Choisissez un nouveau mot de passe avant de continuer.", undefined, "PASSWORD_CHANGE_REQUIRED"),
-  legalAcceptanceRequired: () =>
-    new ApiError(
-      403,
-      "Vous devez accepter les Conditions Générales d'Utilisation et la Politique de confidentialité de Rayon pour continuer. Si votre application ne le propose pas, connectez-vous sur le site web de Rayon pour les accepter, puis réessayez.",
-      undefined,
-      "LEGAL_ACCEPTANCE_REQUIRED",
-    ),
-  legalConsentMissing: () =>
-    new ApiError(
-      400,
-      "Vous devez accepter les Conditions Générales d'Utilisation et la Politique de confidentialité de Rayon. Sans votre accord, l'opération est refusée.",
-      undefined,
-      "LEGAL_CONSENT_MISSING",
-    ),
-  legalVersionOutdated: () =>
-    new ApiError(
-      409,
-      "Les documents juridiques ont été mis à jour. Consultez leur nouvelle version puis confirmez votre accord.",
-      undefined,
-      "LEGAL_VERSION_OUTDATED",
-    ),
   tooManyRequests: (retryAfterSeconds: number) =>
     new ApiError(429, "Trop de tentatives. Réessayez dans quelques instants.", { retryAfter: retryAfterSeconds }, "RATE_LIMITED"),
 };

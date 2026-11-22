@@ -59,17 +59,7 @@ async function login(email: string): Promise<string> {
     body: JSON.stringify({ identifiant: email, motDePasse: PASSWORD }),
   });
   if (!response.ok) throw new Error(`Connexion impossible (${email}) : ${response.status}`);
-  const { token } = ((await response.json()) as { data: { token: string } }).data;
-
-  // Comptes fictifs tout juste créés : ils acceptent par la route réelle.
-  const catalog = (await (await fetch(`${BASE}/api/legal`)).json()) as { data: Record<"terms" | "privacy", { version: string }> };
-  const accepted = await fetch(`${BASE}/api/legal/acceptance`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ accepteDocuments: true, termsVersion: catalog.data.terms.version, privacyVersion: catalog.data.privacy.version }),
-  });
-  if (!accepted.ok) throw new Error(`Acceptation impossible (${email}) : ${accepted.status}`);
-  return token;
+  return ((await response.json()) as { data: { token: string } }).data.token;
 }
 
 async function accounts(pattern: string): Promise<Account[]> {

@@ -20,7 +20,7 @@ import { createOrganizationForUser } from "@/services/onboarding";
 import { createOrganizationWithOwner } from "@/services/platform-admin";
 import { applyConfirmedPurchase, runSubscriptionMaintenance, upsertSubscription } from "@/services/subscription";
 import { runTransaction } from "@/lib/transactions";
-import { acceptedDocuments, createMember, createProduit, createShop, resetDatabase, testKey } from "./helpers/factories";
+import { createMember, createProduit, createShop, resetDatabase, testKey } from "./helpers/factories";
 
 const app = createApp();
 const DAY = 86_400_000;
@@ -87,7 +87,7 @@ describe("essai gratuit à la création de l'organisation", () => {
   });
 
   it("une organisation créée par l'administration reçoit aussi l'essai ; inviter des membres n'en crée pas d'autre", async () => {
-    const admin = await prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: "admin@plateforme.test", motDePasseHash: "x", superAdmin: true, ...acceptedDocuments() } });
+    const admin = await prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: "admin@plateforme.test", motDePasseHash: "x", superAdmin: true } });
     const created = await createOrganizationWithOwner(admin.id, {
       nomOrganisation: "Chez Moussa",
       nomBoutique: "Centre",
@@ -98,8 +98,6 @@ describe("essai gratuit à la création de l'organisation", () => {
       devise: "XOF",
     });
     const owner = await prisma.membre.findFirstOrThrow({ where: { organisationId: created.id } });
-    // Créé par l'administration : le propriétaire accepte lui-même avant d'agir.
-    await prisma.utilisateur.update({ where: { id: owner.utilisateurId }, data: acceptedDocuments() });
     signIn(owner.utilisateurId, created.id, Role.OWNER);
     expect((await newMember(1)).status).toBe(201);
     expect((await newMember(2)).status).toBe(201);
@@ -405,7 +403,7 @@ describe("accès et isolation", () => {
 
   it("administration centrale : interdite aux organisations ; l'administrateur n'a pas d'espace abonnement client", async () => {
     const shop = await createShop();
-    const superAdmin = await prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: "root@plateforme.test", motDePasseHash: "x", superAdmin: true, ...acceptedDocuments() } });
+    const superAdmin = await prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: "root@plateforme.test", motDePasseHash: "x", superAdmin: true } });
     asOwner(shop);
     expect((await request(app).get(`/api/admin/organizations/${shop.organisation.id}/subscription`)).status).toBe(403);
     expect((await request(app).put(`/api/admin/organizations/${shop.organisation.id}/subscription`).send({})).status).toBe(403);

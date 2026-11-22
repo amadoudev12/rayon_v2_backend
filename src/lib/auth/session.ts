@@ -3,7 +3,6 @@ import { requestCache } from "@/lib/http/context";
 import { prisma } from "@/lib/prisma";
 import { Errors, PageRedirect } from "@/lib/api/errors";
 import { can, type Permission } from "@/lib/auth/permissions";
-import { needsAcceptance } from "@/legal/status";
 import type { Role } from "@/generated/prisma/enums";
 
 /** Tenant-scoped identity resolved from the current session. Every API
@@ -32,9 +31,6 @@ export const PASSWORD_CHANGE_PATH = "/changer-mot-de-passe";
 /** Page affichée aux membres d'une organisation suspendue. */
 export const SUSPENDED_PATH = "/suspendu";
 
-/** Page où un compte accepte les documents juridiques en vigueur. */
-export const LEGAL_ACCEPTANCE_PATH = "/acceptation-conditions";
-
 /**
  * Returns the raw session, or null when the request is unauthenticated.
  * The web sends it as an HttpOnly cookie, the mobile app as a Bearer token.
@@ -61,7 +57,6 @@ const loadAccount = requestCache(async (userId: number) => {
       actif: true,
       derniereActiviteLe: true,
       doitChangerMotDePasse: true,
-      acceptationsJuridiques: { select: { termsVersion: true, privacyVersion: true } },
       membre: {
         select: { role: true, organisationId: true, boutiqueId: true, organisation: { select: { actif: true } } },
       },
@@ -94,8 +89,6 @@ type AccountState =
   | { status: "anonymous" }
   /** Session présente mais compte supprimé, ou accès à l'organisation retiré. */
   | { status: "revoked" }
-  /** Compte valide qui doit accepter les documents juridiques : toute fonctionnalité protégée lui est fermée. */
-  | { status: "legal_required" }
   /** Compte valide qui n'a pas encore créé son organisation. */
   | { status: "onboarding"; userId: number }
   /** Gestionnaire de la plateforme : aucun espace boutique, uniquement /admin. */
@@ -113,24 +106,17 @@ async function resolveAccount(): Promise<AccountState> {
   // Compte supprimé, ou désactivé par le super administrateur.
   if (!account || !account.actif) return { status: "revoked" };
 
-  // Point de contrôle unique de l'accord juridique : toutes les gardes
-  // (API, pages, administration, mobile) passent par cette fonction.
-  const mustAccept = needsAcceptance(account.acceptationsJuridiques);
-
   // Vérifié avant l'adhésion : un super administrateur n'obtient jamais de
   // contexte d'organisation, même si une adhésion existait par erreur.
-  if (account.superAdmin) return mustAccept ? { status: "legal_required" } : { status: "superadmin", userId };
+  if (account.superAdmin) return { status: "superadmin", userId };
 
   if (!account.membre) {
     // Le jeton indique une organisation que la base ne connaît plus : le
     // membre a été retiré. Sinon, l'inscription n'est simplement pas terminée.
-    if (session.user.tenant) return { status: "revoked" };
-    return mustAccept ? { status: "legal_required" } : { status: "onboarding", userId };
+    return session.user.tenant ? { status: "revoked" } : { status: "onboarding", userId };
   }
 
-  // Avant l'accord juridique : accepter ne lèverait pas une suspension.
   if (!account.membre.organisation.actif) return { status: "suspended" };
-  if (mustAccept) return { status: "legal_required" };
 
   return {
     status: "member",
@@ -159,19 +145,7 @@ export async function requireUserId(): Promise<number> {
   if (state.status === "onboarding") return state.userId;
   if (state.status === "superadmin") throw Errors.platformAccountOnly();
   if (state.status === "suspended") throw Errors.organizationSuspended();
-  if (state.status === "legal_required") throw Errors.legalAcceptanceRequired();
   throw Errors.unauthenticated();
-}
-
-/**
- * Pour la consultation et l'enregistrement de SES accords juridiques : tout
- * compte actif, qu'il ait accepté ou non. N'ouvre aucun accès aux données.
- */
-export async function requireLegalUserId(): Promise<number> {
-  const state = await resolveAccount();
-  if (state.status === "anonymous") throw Errors.unauthenticated();
-  if (state.status === "revoked") throw Errors.accessRevoked();
-  return (await getSession())!.user.id;
 }
 
 /**
@@ -186,7 +160,6 @@ export async function requireAuthContext(options: { allowPendingPasswordChange?:
   if (state.status === "onboarding") throw Errors.onboardingRequired();
   if (state.status === "superadmin") throw Errors.platformAccountOnly();
   if (state.status === "suspended") throw Errors.organizationSuspended();
-  if (state.status === "legal_required") throw Errors.legalAcceptanceRequired();
   // Mot de passe temporaire (réinitialisé par un responsable) : seul le
   // changement de mot de passe, le profil et la déconnexion restent permis.
   if (state.mustChangePassword && !options.allowPendingPasswordChange) throw Errors.passwordChangeRequired();
@@ -207,7 +180,6 @@ export async function requirePageAuthContext(): Promise<AuthContext> {
   if (state.status === "onboarding") redirect("/onboarding");
   if (state.status === "superadmin") redirect(SUPER_ADMIN_HOME);
   if (state.status === "suspended") redirect(SUSPENDED_PATH);
-  if (state.status === "legal_required") redirect(LEGAL_ACCEPTANCE_PATH);
   if (state.mustChangePassword) redirect(PASSWORD_CHANGE_PATH);
   return state.context;
 }
@@ -225,8 +197,6 @@ function homeFor(state: AccountState): string {
       return SUPER_ADMIN_HOME;
     case "suspended":
       return SUSPENDED_PATH;
-    case "legal_required":
-      return LEGAL_ACCEPTANCE_PATH;
     case "member":
       return "/dashboard";
   }
@@ -240,7 +210,6 @@ function homeFor(state: AccountState): string {
 export async function requireSuperAdmin(): Promise<{ userId: number }> {
   const state = await resolveAccount();
   if (state.status === "anonymous" || state.status === "revoked") throw Errors.unauthenticated();
-  if (state.status === "legal_required") throw Errors.legalAcceptanceRequired();
   if (state.status !== "superadmin") throw Errors.forbidden("Accès réservé à l'administration de la plateforme");
   return { userId: state.userId };
 }

@@ -18,7 +18,7 @@ import { createSale } from "@/services/sale";
 import { getFinancialSummary } from "@/services/finance";
 import { accessFromSubscription } from "@/services/subscription";
 import { parsePeriod } from "@/lib/period";
-import { acceptedDocuments, createMember, createProduit, createShop, resetDatabase, testKey } from "./helpers/factories";
+import { createMember, createProduit, createShop, resetDatabase, testKey } from "./helpers/factories";
 
 const app = createApp();
 
@@ -133,7 +133,7 @@ describe("abonnements (fondations)", () => {
   it("contrôle activé : un abonnement expiré passe l'organisation en lecture seule ; un paiement saisi la réactive, une seule fois", async () => {
     const shop = await createShop();
     const produit = await createProduit(shop.organisation.id, shop.boutique.id, { prixVente: 1_000 });
-    const admin = await prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: "admin@plateforme.test", motDePasseHash: "x", superAdmin: true, ...acceptedDocuments() } });
+    const admin = await prisma.utilisateur.create({ data: { prenom: "Super", nom: "Admin", email: "admin@plateforme.test", motDePasseHash: "x", superAdmin: true } });
     const past = new Date(Date.now() - 40 * day);
     const expired = new Date(Date.now() - 10 * day);
 

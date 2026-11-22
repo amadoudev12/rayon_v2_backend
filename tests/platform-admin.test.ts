@@ -29,7 +29,7 @@ import {
   setUserActive,
 } from "@/services/platform-admin";
 import { createApp } from "@/app";
-import { acceptedDocuments, cancel, createMember, createProduit, createShop, resetDatabase } from "./helpers/factories";
+import { cancel, createMember, createProduit, createShop, resetDatabase } from "./helpers/factories";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -45,7 +45,7 @@ function signIn(userId: number) {
 
 async function createSuperAdmin() {
   return prisma.utilisateur.create({
-    data: { prenom: "Super", nom: "Admin", email: "admin@test.local", motDePasseHash: "x", superAdmin: true, ...acceptedDocuments() },
+    data: { prenom: "Super", nom: "Admin", email: "admin@test.local", motDePasseHash: "x", superAdmin: true },
   });
 }
 
@@ -113,7 +113,7 @@ describe("accès à l'espace super administrateur", () => {
 
   it("refuse aussi un compte dont l'inscription n'est pas terminée", async () => {
     const user = await prisma.utilisateur.create({
-      data: { prenom: "Nouveau", nom: "Compte", email: "nouveau@test.local", motDePasseHash: "x", ...acceptedDocuments() },
+      data: { prenom: "Nouveau", nom: "Compte", email: "nouveau@test.local", motDePasseHash: "x" },
     });
     signIn(user.id);
 
@@ -429,7 +429,6 @@ describe("gestion des boutiques et des utilisateurs", () => {
         email: "root@test.local",
         motDePasseHash: await hashPassword("Ancien123"),
         superAdmin: true,
-        ...acceptedDocuments(),
       },
     });
     signIn(admin.id);

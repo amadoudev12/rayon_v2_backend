@@ -1,8 +1,0 @@
-// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
-
-exports[`versions > le texte d'une version publiée n'a pas changé 1`] = `
-[
-  "terms@1.0 b66d32811ae2fa0860c65d43583651a833554a8468cfcd6cef5891905d4b9e66",
-  "privacy@1.0 0b8e11995ec434c939ac6c6b9064a6dbb93db362bcfba58733e95d43a7e02a95",
-]
-`;
